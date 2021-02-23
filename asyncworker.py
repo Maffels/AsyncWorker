@@ -1,7 +1,7 @@
 """ Module for handling threaded CPU-bound work asynchronously within the asyncio framework. 
     Its aim is to function as an easy to use bridge between I/O-bound and CPU-bound code.
 
-    Can be used in an asyncio contextmanager or by constructing an instance and after calling .run() on it.
+    Can be used in an asyncio contextmanager or by constructing an instance of it.
     When not using it in a context manager, needs .run() to start,
     and .quit() or it will keep itself alive waiting for work.
     
@@ -13,7 +13,8 @@
       This will return a coroutine that is an awaitable substitute for the original callable,
       which can be called with the same arguments and returns as soon as the result is ready. 
     
-    Will by default use total-1 system processing threads, but can this be specified by including worker_amount=n.
+    Will by default use total-1 system processing threads for multiprocessing work,
+    but can this be specified by using the parameter worker_amount=n at initialisation.
     
     Looks to be somewhat quicker than using a ProcessPoolExecutor with the standard executor.submit method, 
     but way slower than executor.map. 
@@ -219,7 +220,7 @@ class _WorkerManager:
         """
 
         @staticmethod
-        def work(
+        def _work(
             workerobj: _WorkerProcess,
             receiveQueue: multiprocessing.Queue,
             sendQueue: multiprocessing.Queue,
@@ -323,7 +324,7 @@ class _WorkerManager:
             self.listenprocess.start()
 
             self.workerprocess = multiprocessing.Process(
-                target=self.work,
+                target=self._work,
                 args=(
                     _WorkerProcess,
                     self.receiveQueue,
@@ -632,7 +633,7 @@ class AsyncWorker:
         else:
             return result["data"]
 
-    async def process(self, func: Callable[[Any], Any], *args, **kwargs) -> Awaitable:
+    async def process(self, func: Callable, *args, **kwargs) -> Awaitable:
         """Coroutine that processes the given callable with the provided arguments,
         returns the results when ready.
         """
