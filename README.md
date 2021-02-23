@@ -11,14 +11,14 @@ When not using it in a context manager, needs a call to .run() to start, and .qu
 Callables can currently be processed in two ways:
 
     - Callables can be processed directly by calling .process(Callable, *args, **kwargs), 
-      which is an awaitable that returns as soon as the callable with it's args has been processed
+      which is an awaitable that returns as soon as the callable with its args has been processed
       
       async with AsyncWorker() as asyncworker:
         result = await asyncworker.process(CPU_bound_function, *args, **kwargs)
 
       
     - Callables can be registered with the class by calling .register(Callable). 
-      This will return a coroutine that is an awaitable substitute for the original callable,
+      This will return a coroutine that functions as an awaitable substitute for the original callable,
       which can be called with the same arguments and returns as soon as the result is ready.
       
       async with AsyncWorker() as asyncworker:
