@@ -11,14 +11,22 @@ When not using it in a context manager, needs .run() to start, and .quit() to st
 Callables can currently be processed in two ways:
 
     - Callables can be processed directly by calling .process(Callable, *args, **kwargs), 
-      which is an awaitable that returns as soon as the callable with it's args has been processed.
+      which is an awaitable that returns as soon as the callable with it's args has been processed
+      
+      async with AsyncWorker() as asyncworker:
+        result = await asyncworker.process(CPU_bound_function, *args, **kwargs)
+
+      
     - Callables can be registered with the class by calling .register(Callable). 
       This will return a coroutine that is an awaitable substitute for the original callable,
-      which can be called with the same arguments and returns as soon as the result is ready. 
-    
+      which can be called with the same arguments and returns as soon as the result is ready.
+      
+      async with AsyncWorker() as asyncworker:
+        CPU_bound_coroutine = await asyncworker.register_callable(CPU_bound_function)
+        result = await CPU_bound_coroutine(*args, **kwargs)
+
+
 Will use total-1 system processing threads by default, but can this be specified by including worker_amount=n.
     
-Looks to be somewhat quicker than using a ProcessPoolExecutor with the standard executor.submit method, 
+Looks like its somewhat quicker than using a ProcessPoolExecutor with the standard executor.submit method, 
 but way slower than executor.map. 
-Ideally in the future AsyncWorker would be somewhat closer to the performance of executor.map, 
-but not losing the current flexibility in the process might be difficult.  
