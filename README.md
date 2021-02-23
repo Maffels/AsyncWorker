@@ -2,10 +2,10 @@
 Asyncio multithreading bridge module for Python
 
 Module for handling threaded CPU-bound work asynchronously within the asyncio framework. 
-It is aimed to function as a easy to use bridge between I/O-bound and CPU-bound code.
+It is aimed to function as an easy to use bridge between I/O-bound and CPU-bound code.
 
 Can be used in an async context manager or by constructing an instance and calling .run() on it.
-When not using it in a context manager, needs .run() to start, and .quit() to stop or it will keep itself alive waiting for work.
+When not using it in a context manager, needs a call to .run() to start, and .quit() to stop.
     
 
 Callables can currently be processed in two ways:
