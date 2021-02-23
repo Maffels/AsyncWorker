@@ -10,6 +10,7 @@ and .quit() or it will keep itself alive waiting for work.
     
 
 Callables can currently be processed in two ways:
+
     - Callables can be processed directly by calling .process(Callable, *args, **kwargs), 
       which is an awaitable that returns as soon as the callable with it's args has been processed.
     - Callables can be registered with the class by calling .register(Callable). 
