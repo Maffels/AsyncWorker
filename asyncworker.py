@@ -52,7 +52,7 @@ INSTRUCTIONS = frozenset(
 
 
 def MESSAGE(
-    instruction: str[INSTRUCTIONS], data: Any = None, id: int = None
+    instruction: str, data: Any = None, id: int = None
 ) -> Dict[str, Any]:
     # Basic information structure used to pass information around the different parts of this module
     if instruction not in INSTRUCTIONS:
@@ -274,7 +274,7 @@ class _WorkerManager:
                 except queue.Empty:
                     pass
 
-        def _communicate(self, instruction: str[INSTRUCTIONS], data=None):
+        def _communicate(self, instruction: str, data=None):
             """Used to abstract away the needs of communicating directlty with the worker process.
 
             Constructs an awaitable dict entry by using the message id as the identifier and adding a settable Event object.
@@ -600,7 +600,7 @@ class AsyncWorker:
         except KeyError:
             logger.error(f"got unregistered returnmessage: {message}.")
 
-    async def _communicate(self, instruction: str[INSTRUCTIONS], data:Any=None):
+    async def _communicate(self, instruction: str, data:Any=None):
         """Abstracts away the communication to and from the workermanager thread.
         Builds an awaitable asyncio.Future object which will be set by the
         workermanager thread when the result is available,
