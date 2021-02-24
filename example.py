@@ -66,7 +66,7 @@ async def register_callable_example(asyncworker: AsyncWorker):
     tasks = [asyncio.create_task(async_find_primes(MAX_NUM)) for _ in range(NUM_JOBS)]
     await asyncio.wait(tasks)
     
-    print(f"processing async_find_primes done in {time.time() - starttime} seconds)")
+    print(f"processing async_find_primes done in {time.time() - starttime} seconds.")
 
 
 async def main():

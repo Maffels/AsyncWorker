@@ -29,7 +29,7 @@ import multiprocessing
 import queue
 import threading
 import time
-from types import MappingProxyType, coroutine
+from types import MappingProxyType
 from typing import Any, Awaitable, Coroutine, Dict, Callable, Mapping, Union
 
 
@@ -39,22 +39,20 @@ INSTRUCTIONS = frozenset(
     {
         "register_callable",
         "process",
-        "process_callable",
+        "process_registered",
         "start",
         "stop",
         "quit",
-        "confirm",
         "done",
         "instruction_error",
         "id_error",
-        "error",
         "exception",
     }
 )
 
 
 def MESSAGE(
-    instruction: INSTRUCTIONS, data: Any = None, id: int = None
+    instruction: str[INSTRUCTIONS], data: Any = None, id: int = None
 ) -> Dict[str, Any]:
     # Basic information structure used to pass information around the different parts of this module
     if instruction not in INSTRUCTIONS:
@@ -77,7 +75,7 @@ class _WorkerProcess:
             {
                 "register_callable": self.register_callable,
                 "process": self.process,
-                "process_callable": self.process_callable,
+                "process_registered": self.process_registered,
                 "start": self.start,
                 "stop": self.stop,
                 "quit": self.quit,
@@ -110,11 +108,11 @@ class _WorkerProcess:
             callable_id = message["data"]["id"]
             new_callable = message["data"]["callable"]
             self.registered_callables[callable_id] = new_callable
-            self.sendQueue.put(MESSAGE("confirm", "registered", message["id"]))
+            self.sendQueue.put(MESSAGE("done", "registered", message["id"]))
         except Exception as e:
-            self.sendQueue.put(MESSAGE("error", e, message["id"]))
+            self.sendQueue.put(MESSAGE("exception", e, message["id"]))
 
-    def process_callable(self, message: MESSAGE):
+    def process_registered(self, message: MESSAGE):
         # Will call the specified callable with the given parameters and send back the results.
         id = message["data"]["id"]
         try:
@@ -176,7 +174,7 @@ class _WorkerProcess:
             target=self.work, name=f"workerprocess {self.name} workthread"
         )
         self.workthread.start()
-        self.sendQueue.put(MESSAGE("confirm", id=message["id"]))
+        self.sendQueue.put(MESSAGE("done", id=message["id"]))
         # self.run()
 
     def stop(self, message: MESSAGE = None):
@@ -184,7 +182,7 @@ class _WorkerProcess:
         self.do_work = False
         self.workthread.join()
         if message:
-            self.sendQueue.send(MESSAGE("confirm", id=message["id"]))
+            self.sendQueue.send(MESSAGE("done", id=message["id"]))
 
     def quit(self, message: MESSAGE = None):
         # Will shut down this worker process.
@@ -192,7 +190,7 @@ class _WorkerProcess:
         self.running = False
         if message:
             try:
-                self.sendQueue.put(MESSAGE("confirm", id=message["id"]))
+                self.sendQueue.put(MESSAGE("done", id=message["id"]))
             except BrokenPipeError as e:
                 pass
 
@@ -276,7 +274,7 @@ class _WorkerManager:
                 except queue.Empty:
                     pass
 
-        def _communicate(self, instruction, data=None):
+        def _communicate(self, instruction: str[INSTRUCTIONS], data=None):
             """Used to abstract away the needs of communicating directlty with the worker process.
 
             Constructs an awaitable dict entry by using the message id as the identifier and adding a settable Event object.
@@ -304,7 +302,7 @@ class _WorkerManager:
             which can then be used by later calls for processing this specific callable.
             """
             returnmessage = self._communicate("register_callable", newcallable)
-            if returnmessage["instruction"] == "error":
+            if returnmessage["instruction"] == "exception":
                 logger.error(
                     f"""Worker{self.name} during the registering of the callabe: {newcallable} 
                     encountered error: {returnmessage["data"]} """
@@ -363,7 +361,7 @@ class _WorkerManager:
             {
                 "register_callable": self.register_callable,
                 "process": self.process,
-                "process_callable": self.process_callable,
+                "process_registered": self.process_registered,
                 "start": self.start,
                 "stop": self.stop,
                 "quit": self.quit,
@@ -403,11 +401,11 @@ class _WorkerManager:
             except queue.Empty:
                 pass
 
-    def return_result(self, message):
-        # Used to reinsert responses back into the master asyncio eventloop.
+    def return_result(self, message:MESSAGE):
+        # Used to reinsert responses back into the event loop.
         asyncio.run_coroutine_threadsafe(self.return_callable(message), self.loop)
 
-    def register_callable(self, message):
+    def register_callable(self, message:MESSAGE):
         """Used to register calleables with all the worker processes.
         Builds a thread for each process which then communicates the callable,
         and returns when all threads are done.
@@ -434,19 +432,19 @@ class _WorkerManager:
         t = threading.Thread(target=registertask, name="registerTask")
         t.start()
 
-    def process(self, message):
+    def process(self, message:MESSAGE):
         """Simple passthrough method that puts work in the workqueue
         The return of the work is handled by _handle_returnqueue in its own thread.
         """
         self.workqueue.put(message)
 
-    def process_callable(self, message):
+    def process_registered(self, message:MESSAGE):
         """Simple passthrough method that puts work for an already registered callable in the workqueue
         The return of the work is handled by _handle_returnqueue in its own thread.
         """
         self.workqueue.put(message)
 
-    def start(self, message):
+    def start(self, message:MESSAGE):
         """Used to start the worker processes which can then process given work on multiple threads
         Starts a dedicated startup thread for each worker so they can be started in parallel,
         returns when all workers report they're ready for work.
@@ -476,16 +474,18 @@ class _WorkerManager:
             returnmessage = MESSAGE("done", id=message["id"])
             self.return_result(returnmessage)
 
-        # Building thread to handle the work return queue
+        # Building a thread to handle the work return queue.
         returnthread = threading.Thread(
             target=self._handle_returnqueue, name="handle work return thread"
         )
         returnthread.start()
         self.threads.append(returnthread)
+
+        # Building a thread that starts the worker processes.
         t = threading.Thread(target=dostart, name="start workers")
         t.start()
 
-    def stop(self, message=None):
+    def stop(self, message:MESSAGE=None):
         """will shut down the worker processes by spawning a thread for each worker
         that then tries to stop the workers in parallel. Returns when all worker processes are stopped.
         """
@@ -509,7 +509,7 @@ class _WorkerManager:
             returnmessage = MESSAGE("done", None, message["id"])
             self.return_result(returnmessage)
 
-    def quit(self, message=None):
+    def quit(self, message:MESSAGE=None):
         """Will shut down this workermanager thread and all it's subprocesses."""
         self.stop()
         if message:
@@ -519,21 +519,14 @@ class _WorkerManager:
 
     def run(self):
         """Functions as the target of the newly built workermanagerthread,
-        starts listening and handling further instructions from the host queue and its bound event loop.
+        starts listening and handling further instructions from the event loop via the given queue.
         """
         self.running = True
 
         while self.running:
             try:
                 message = self.hostqueue.get(block=True, timeout=self.sleeptime)
-                try:
-                    self.instructions[message["instruction"]](message)
-                    # if "data" not in message.keys():
-                    # message["data"] = None
-                except KeyError:
-                    pass
-                    # self.hostconn.send(
-                    # MESSAGE("instruction_error", "unknown_instruction", message["id"]))
+                self.instructions[message["instruction"]](message)
             except queue.Empty:
                 pass
 
@@ -550,7 +543,7 @@ class AsyncWorker:
     """
 
     class _SavedCallable:
-        """Simple dataclass for grouping "callable" information"""
+        """Simple dataclass for grouping registered callable information"""
 
         def __init__(self, id: int, newcallable: Callable):
             self.callable = newcallable
@@ -560,14 +553,13 @@ class AsyncWorker:
             return str(f"Saved callable {self.callable}.")
 
         def __eq__(self, value: Callable):
-            return callable(value)
-            # if isinstance(value, Call):
-            #     if self.callable != value:
-            #         return False
-            #     else:
-            #         return True
-            # else:
-            #     return False
+            if callable(value):
+                if value == self.callable:
+                    return True
+                else:
+                    return False
+            else:
+                False
 
     def __init__(
         self,
@@ -599,7 +591,7 @@ class AsyncWorker:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.quit()
 
-    async def _update_resultdict(self, message):
+    async def _update_resultdict(self, message:MESSAGE):
         """Used by the external workermanager thread to reinsert results into the loop
         Uses the message id to find the relevant dict entry and sets its results to the return value.
         """
@@ -608,7 +600,7 @@ class AsyncWorker:
         except KeyError:
             logger.error(f"got unregistered returnmessage: {message}.")
 
-    async def _communicate(self, instruction, data=None):
+    async def _communicate(self, instruction: str[INSTRUCTIONS], data:Any=None):
         """Abstracts away the communication to and from the workermanager thread.
         Builds an awaitable asyncio.Future object which will be set by the
         workermanager thread when the result is available,
@@ -627,7 +619,7 @@ class AsyncWorker:
     async def _submit_callable_job(self, callableid: int, args, kwargs):
         # Functions as a "proxy" that gets returned when a new callable is registered
         job = {"id": callableid, "args": args, "kwargs": kwargs}
-        result = await self._communicate("process_callable", job)
+        result = await self._communicate("process_registered", job)
         if result["instruction"] == "exception":
             raise result["data"]
         else:
@@ -649,12 +641,11 @@ class AsyncWorker:
         This awaitable can be called together with the original callable arguments and will return the results when ready.
 
         The goal is to simply transform the given CPU-bound callable into an awaitable coroutine
-        which the event loop can simply await instead of block on executing.
+        which the event loop can await instead of the callable blocking the event loop.
         """
-        id = None
 
-        # Build and store a new saved_callable instance
-        #  and tell the workermanager to register it with all processing threads
+        # Build and store a new saved_callable instance,
+        # and tell the workermanager to register it with all processing threads
         id = len(self.saved_callables)
         savedcallable = self._SavedCallable(id=id, newcallable=newcallable)
         self.saved_callables[savedcallable.id] = savedcallable
@@ -663,7 +654,7 @@ class AsyncWorker:
         if returnmessage["instruction"] != "done":
             raise returnmessage["data"]
 
-        # Helper function wrapping the coroutine to be return with the correct parameters
+        # Helper function wrapping the coroutine to be returned as the given callable.
         @functools.wraps(newcallable)
         async def get_callable(*args, **kwargs):
             return await self._submit_callable_job(id, args, kwargs)
@@ -684,13 +675,12 @@ class AsyncWorker:
             timeout=self.timeout,
             return_callable=self._update_resultdict,
         )
+
         self.workermanagerthread = threading.Thread(
             target=self.workermanager.run, name="AsyncWorker WorkerManager"
         )
         self.workermanagerthread.start()
-        returnmessage = await self._communicate("start")
 
-        if returnmessage["instruction"] == "done":
-            return True
-        else:
-            return False
+        # Tells and waits for the workermanager to start.
+        await self._communicate("start")
+
