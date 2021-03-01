@@ -26,10 +26,10 @@ import asyncio
 import functools
 import logging
 import multiprocessing
+import os
 import queue
 import threading
 import time
-from types import MappingProxyType
 from typing import Any, Awaitable, Coroutine, Dict, Callable, Mapping, Union
 
 
@@ -44,21 +44,19 @@ INSTRUCTIONS = frozenset(
         "stop",
         "quit",
         "done",
-        "instruction_error",
-        "id_error",
         "exception",
     }
 )
 
 
 def MESSAGE(
-    instruction: str, data: Any = None, id: int = None
+    instruction: str, data: Any = None, m_id: int = None
 ) -> Dict[str, Any]:
     # Basic information structure used to pass information around the different parts of this module
     if instruction not in INSTRUCTIONS:
         raise KeyError(f"{instruction} not a valid instruction")
     else:
-        return {"instruction": instruction, "data": data, "id": id}
+        return {"instruction": instruction, "data": data, "id": m_id}
 
 
 class _WorkerProcess:
@@ -71,8 +69,7 @@ class _WorkerProcess:
         for ease of use when decoding messages.
         Using a MappingProxyType seemed interesting and potentially best fitting for this use.
         """
-        return MappingProxyType(
-            {
+        return {
                 "register_callable": self.register_callable,
                 "process": self.process,
                 "process_registered": self.process_registered,
@@ -80,7 +77,7 @@ class _WorkerProcess:
                 "stop": self.stop,
                 "quit": self.quit,
             }
-        )
+        
 
     def __init__(
         self,
@@ -105,22 +102,19 @@ class _WorkerProcess:
     def register_callable(self, message: MESSAGE):
         # Used to register the given callable with this instance.
         try:
-            callable_id = message["data"]["id"]
+            c_id = message["data"]["id"]
             new_callable = message["data"]["callable"]
-            self.registered_callables[callable_id] = new_callable
+            self.registered_callables[c_id] = new_callable
             self.sendQueue.put(MESSAGE("done", "registered", message["id"]))
         except Exception as e:
             self.sendQueue.put(MESSAGE("exception", e, message["id"]))
 
     def process_registered(self, message: MESSAGE):
         # Will call the specified callable with the given parameters and send back the results.
-        id = message["data"]["id"]
-        try:
-            saved_callable = self.registered_callables[id]
-        except KeyError:
-            returnmessage = MESSAGE("id_error", id, message["id"])
-            self.resultqueue.put(returnmessage)
-            return
+        c_id = message["data"]["id"]
+
+        saved_callable = self.registered_callables[c_id]
+
 
         args = message["data"]["args"]
         kwargs = message["data"]["kwargs"]
@@ -150,12 +144,7 @@ class _WorkerProcess:
     def handle_message(self, message: MESSAGE):
         # Uses the included instruction to call the correct function for the enclosed data
         #  with the help of the instruction mapping
-        try:
-            self.instructions[message["instruction"]](message)
-        except KeyError:
-            self.sendQueue.put(
-                MESSAGE("instruction_error", "unknown_instruction", message["id"])
-            )
+        self.instructions[message["instruction"]](message)
 
     def work(self):
         # Used as target for the workerthread, pulls work from the workqueue and hands it over for processing.
@@ -174,7 +163,7 @@ class _WorkerProcess:
             target=self.work, name=f"workerprocess {self.name} workthread"
         )
         self.workthread.start()
-        self.sendQueue.put(MESSAGE("done", id=message["id"]))
+        self.sendQueue.put(MESSAGE("done", m_id=message["id"]))
         # self.run()
 
     def stop(self, message: MESSAGE = None):
@@ -182,7 +171,7 @@ class _WorkerProcess:
         self.do_work = False
         self.workthread.join()
         if message:
-            self.sendQueue.send(MESSAGE("done", id=message["id"]))
+            self.sendQueue.send(MESSAGE("done", m_id=message["id"]))
 
     def quit(self, message: MESSAGE = None):
         # Will shut down this worker process.
@@ -190,7 +179,7 @@ class _WorkerProcess:
         self.running = False
         if message:
             try:
-                self.sendQueue.put(MESSAGE("done", id=message["id"]))
+                self.sendQueue.put(MESSAGE("done", m_id=message["id"]))
             except BrokenPipeError as e:
                 pass
 
@@ -357,8 +346,7 @@ class _WorkerManager:
         for ease of use when decoding messages.
         Using a MappingProxyType seemed interesting and potentially best fitting for this use.
         """
-        return MappingProxyType(
-            {
+        return {
                 "register_callable": self.register_callable,
                 "process": self.process,
                 "process_registered": self.process_registered,
@@ -366,7 +354,6 @@ class _WorkerManager:
                 "stop": self.stop,
                 "quit": self.quit,
             }
-        )
 
     def __init__(
         self,
@@ -471,7 +458,7 @@ class _WorkerManager:
                 thread.start()
             for thread in starttreads:
                 thread.join()
-            returnmessage = MESSAGE("done", id=message["id"])
+            returnmessage = MESSAGE("done", m_id=message["id"])
             self.return_result(returnmessage)
 
         # Building a thread to handle the work return queue.
@@ -509,7 +496,7 @@ class _WorkerManager:
             returnmessage = MESSAGE("done", None, message["id"])
             self.return_result(returnmessage)
 
-    def quit(self, message:MESSAGE=None):
+    def quit(self, message=None):
         """Will shut down this workermanager thread and all it's subprocesses."""
         self.stop()
         if message:
@@ -545,9 +532,9 @@ class AsyncWorker:
     class _SavedCallable:
         """Simple dataclass for grouping registered callable information"""
 
-        def __init__(self, id: int, newcallable: Callable):
+        def __init__(self, c_id: int, newcallable: Callable):
             self.callable = newcallable
-            self.id = id
+            self.c_id = c_id
 
         def __str__(self):
             return str(f"Saved callable {self.callable}.")
@@ -571,8 +558,6 @@ class AsyncWorker:
         if worker_amount:
             self.worker_amount = worker_amount
         else:
-            import os
-
             cpus = os.cpu_count()
             self.worker_amount = cpus - 1 if cpus > 2 else 1
 
@@ -591,7 +576,7 @@ class AsyncWorker:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.quit()
 
-    async def _update_resultdict(self, message:MESSAGE):
+    async def _update_resultdict(self, message):
         """Used by the external workermanager thread to reinsert results into the loop
         Uses the message id to find the relevant dict entry and sets its results to the return value.
         """
@@ -616,9 +601,9 @@ class AsyncWorker:
         self._internal_results.pop(worknum)
         return returnmessage
 
-    async def _submit_callable_job(self, callableid: int, args, kwargs):
+    async def _submit_callable_job(self, c_id: int, args, kwargs):
         # Functions as a "proxy" that gets returned when a new callable is registered
-        job = {"id": callableid, "args": args, "kwargs": kwargs}
+        job = {"id": c_id, "args": args, "kwargs": kwargs}
         result = await self._communicate("process_registered", job)
         if result["instruction"] == "exception":
             raise result["data"]
@@ -646,10 +631,10 @@ class AsyncWorker:
 
         # Build and store a new saved_callable instance,
         # and tell the workermanager to register it with all processing threads
-        id = len(self.saved_callables)
-        savedcallable = self._SavedCallable(id=id, newcallable=newcallable)
-        self.saved_callables[savedcallable.id] = savedcallable
-        callabledata = {"id": savedcallable.id, "callable": newcallable}
+        c_id = len(self.saved_callables)
+        savedcallable = self._SavedCallable(c_id=c_id, newcallable=newcallable)
+        self.saved_callables[savedcallable.c_id] = savedcallable
+        callabledata = {"id": savedcallable.c_id, "callable": newcallable}
         returnmessage = await self._communicate("register_callable", callabledata)
         if returnmessage["instruction"] != "done":
             raise returnmessage["data"]
@@ -657,7 +642,7 @@ class AsyncWorker:
         # Helper function wrapping the coroutine to be returned as the given callable.
         @functools.wraps(newcallable)
         async def get_callable(*args, **kwargs):
-            return await self._submit_callable_job(id, args, kwargs)
+            return await self._submit_callable_job(c_id, args, kwargs)
 
         return get_callable
 

@@ -1,4 +1,6 @@
 # AsyncWorker
+Written with Python 3.8
+
 Asyncio multithreading bridge module for Python
 
 Module for handling threaded CPU-bound work asynchronously within the asyncio framework. 
