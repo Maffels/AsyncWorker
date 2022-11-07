@@ -30,6 +30,8 @@ import os
 import queue
 import threading
 import time
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Awaitable, Coroutine, Dict, Callable, Mapping, Union
 
 
@@ -57,6 +59,32 @@ def MESSAGE(
         raise KeyError(f"{instruction} not a valid instruction")
     else:
         return {"instruction": instruction, "data": data, "id": m_id}
+
+# class INSTRUCTIONS(Enum):
+#         register_callable = 1
+#         process = 2
+#         processegistered = 3
+#         start = 4
+#         stop = 5
+#         quit = 6
+#         done = 7
+#         exception = 8
+
+# class Message:
+#     def __init__(self,instruction:INSTRUCTIONS, data: Any =None, id: int = None):
+#         if instruction in INSTRUCTIONS:
+#             self.instruction = instruction
+#         else:
+#             raise KeyError(f"{instruction} not a valid instruction")
+#         self.data = data
+#         self.id = id
+        
+#     def __str__(self):
+#         return f"Message: {self.instruction=}, {self.data=}, {self.id=}"
+    
+#     def __repr__(self):
+#         return self.__str__()
+        
 
 
 class _WorkerProcess:
