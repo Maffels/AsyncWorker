@@ -42,7 +42,7 @@ answer = find_primes(MAX_NUM)
 
 
 @pytest.fixture
-async def default_worker():
+async def default_worker() -> asyncworker.AsyncWorker:
     worker = asyncworker.AsyncWorker(HARDWARE_THREADS)
     await worker.run()
     yield worker
@@ -50,36 +50,48 @@ async def default_worker():
 
 
 @pytest.fixture
-async def context_worker():
+async def context_worker() -> asyncworker.AsyncWorker:
     async with asyncworker.AsyncWorker(HARDWARE_THREADS) as worker:
         yield worker
 
+@pytest.fixture
+async def worker_types(default_worker,context_worker) -> list[asyncworker.AsyncWorker]:
+    yield default_worker
+    yield context_worker
+
 
 @pytest.fixture
-async def workers():
+async def workers(worker_types):
     for n in HARDWARE_THREADS:
-        async with asyncworker.AsyncWorker(n) as worker:
+        async for worker in worker_types:
             yield worker
-        worker = asyncworker.AsyncWorker(n)
-        await worker.run()
-        yield worker
-        await worker.quit()
+        # async with asyncworker.AsyncWorker(n) as worker:
+        #     yield worker
+        # worker = asyncworker.AsyncWorker(n)
+        # await worker.run()
+        # yield worker
+        # await worker.quit()
 
 
 async def test_test():
     assert True == True
 
+async def test_register(worker_types:list[asyncworker.AsyncWorker]):
+    async for worker in worker_types:
+        registered_callable = await worker.register_callable(find_primes)
+        assert isinstance(registered_callable,callable)
 
-async def test_process_default(workers: list[asyncworker.AsyncWorker]):
-    async for worker in workers:
-        jobs = [asyncio.create_task(worker.process(find_primes, MAX_NUM)) for _ in range(NUM_JOBS)]
-        for completed in asyncio.as_completed(jobs):
-            assert await completed == answer
+
+# async def test_process_default(workers: list[asyncworker.AsyncWorker]):
+#     async for worker in workers:
+#         jobs = [asyncio.create_task(worker.process(find_primes, MAX_NUM)) for _ in range(NUM_JOBS)]
+#         for completed in asyncio.as_completed(jobs):
+#             assert await completed == answer
             
-async def test_registered_function(workers: list[asyncworker.AsyncWorker]):
-    async for worker in workers:
-        async_work = await worker.register_callable(find_primes)
-        jobs = [asyncio.create_task(async_work(MAX_NUM)) for _ in range(NUM_JOBS)]
-        for completed in asyncio.as_completed(jobs):
-            assert await completed == answer
+# async def test_registered_function(workers: list[asyncworker.AsyncWorker]):
+#     async for worker in workers:
+#         async_work = await worker.register_callable(find_primes)
+#         jobs = [asyncio.create_task(async_work(MAX_NUM)) for _ in range(NUM_JOBS)]
+#         for completed in asyncio.as_completed(jobs):
+#             assert await completed == answer
            
