@@ -1,7 +1,9 @@
 import asyncio
-from asyncworker import AsyncWorker
 import math
 import time
+import os
+
+from asyncworker import AsyncWorker
 
 """ Example which uses find_primes as a CPU-bound task scheduled from inside an event loop.
 
@@ -12,7 +14,7 @@ import time
 """
 
 
-MAX_NUM = 100000
+MAX_NUM = 50000
 NUM_JOBS = 100
 CPU_THREADS = None
 
@@ -55,7 +57,7 @@ def default_process_workload():
 async def simple_example():
 
     # Starting the AsyncWorker Class via a context manager for ease of use
-    async with AsyncWorker() as worker:
+    async with AsyncWorker(CPU_THREADS) as worker:
         # Calling asyncworker.process(callable, *args, *kwargs) and awaiting the result
         result = await worker.process(find_primes, 1000)
         print(result)
@@ -65,7 +67,7 @@ async def simple_example():
 async def simple_registered_example():
 
     # Starting the AsyncWorker class via a context manager for ease of use
-    async with AsyncWorker() as worker:
+    async with AsyncWorker(CPU_THREADS) as worker:
         # Registering a cpu-bound callable by calling asyncworker.register_callable(callable)
         awaitable_workload = await worker.register_callable(find_primes)
         # Awaiting the processing of the pre-registered callable with the given arguments
@@ -79,7 +81,7 @@ async def simple_registered_example():
 async def simple_no_context_manager():
 
     # getting an instance of AsyncWorker
-    worker = AsyncWorker()
+    worker = AsyncWorker(CPU_THREADS)
 
     # awaiting the initialisation of the workers by calling asyncworker.init()
     await worker.init()
@@ -96,7 +98,7 @@ async def simple_no_context_manager():
 async def process_multiple_callable_example():
 
     # Starting the AsyncWorker class via a context manager
-    async with AsyncWorker() as worker:
+    async with AsyncWorker(CPU_THREADS) as worker:
         starttime = time.time()
         # queueing up processing tasks by using asyncio.create_task(asyncworker.process(workload,*args,*kwargs))
         tasks = [
@@ -114,7 +116,7 @@ async def process_multiple_callable_example():
 async def process_multiple_registered_callable_example():
 
     # Starting the AsyncWorker class via a context manager
-    async with AsyncWorker() as worker:
+    async with AsyncWorker(CPU_THREADS) as worker:
 
         # Registering a cpu-bound callable by calling asyncworker.register_callable(callable)
         async_find_primes = await worker.register_callable(find_primes)
@@ -132,12 +134,13 @@ async def process_multiple_registered_callable_example():
 
 
 async def main():
-    print("Running example of AsyncWorker")
+    cpu_threads = CPU_THREADS if CPU_THREADS else (os.cpu_count() - 1 if os.cpu_count() > 2 else 1)
+    print(f"Running example of AsyncWorker using {cpu_threads} threads")
     print(
         f"Processing the finding of prime numbers up til {MAX_NUM}, {NUM_JOBS} times \n"
     )
     print(
-        "starting with the default single threaded processing, this can take a while..."
+        "starting with the default single threaded processing, this might take some time..."
     )
     default_time = default_process_workload()
     print(

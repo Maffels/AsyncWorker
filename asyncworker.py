@@ -53,7 +53,7 @@ class Instruction(Enum):
 class Message:
     instruction: Instruction
     id: int
-    data: any = None
+    data: Any = None
 
     def __str__(self):
         return f"Message: {self.instruction=}, {self.data=}, {self.id=}"
@@ -79,7 +79,7 @@ class SavedCallable:
             else:
                 return False
         else:
-            False
+            return False
 
 
 @dataclass
@@ -101,7 +101,7 @@ class _WorkerProcess:
     Will check its hostconnection for instructions, and its workqueue for work when enabled.
     """
 
-    def get_instructions(self) -> Mapping[str, Callable[[Any], None]]:
+    def get_instructions(self) -> dict[Instruction, Callable]:
         """Returns a mapping of the instruction keywords to the WorkerProcess class function calls
         for ease of use when decoding messages.
         Using a MappingProxyType seemed interesting and potentially best fitting for this use.
@@ -124,10 +124,10 @@ class _WorkerProcess:
         workername: str,
         sleeptime: float = 0.1,
     ):
-        self.sendQueue = sendQueue
-        self.receiveQueue = receiveQueue
-        self.resultqueue = resultQueue
-        self.workQueue = workQueue
+        self.sendQueue: multiprocessing.Queue = sendQueue
+        self.receiveQueue: multiprocessing.Queue = receiveQueue
+        self.resultqueue: multiprocessing.Queue = resultQueue
+        self.workQueue: multiprocessing.Queue = workQueue
         self.name = workername
         self.sleeptime = sleeptime
         self.instructions = self.get_instructions()
@@ -204,18 +204,18 @@ class _WorkerProcess:
         )
         # self.run()
 
-    def stop(self, message: Message = None):
+    def stop(self, message: Message | None = None):
         # For telling this instance to stop checking the shared workqueue for work, but not quit.
         self.do_work = False
         self.workthread.join()
         if message:
-            self.sendQueue.send(
+            self.sendQueue.put(
                 Message(
                     Instruction.done, id=message.id, data=f"stopped worker {self.name}"
                 )
             )
 
-    def quit(self, message: Message = None):
+    def quit(self, message: Message | None = None):
         # Will shut down this worker process.
         self.stop()
         self.running = False
@@ -309,7 +309,7 @@ class _WorkerManager:
                 except queue.Empty:
                     pass
 
-        def _communicate(self, instruction: Instruction, data=None):
+        def _communicate(self, instruction: Instruction, data: Any| None =None) -> Message :
             """Used to abstract away the needs of communicating directlty with the worker process.
 
             Constructs an awaitable dict entry by using the message id as the identifier and adding a settable Event object.
@@ -326,13 +326,15 @@ class _WorkerManager:
             self.sendQueue.put(message)
             if self.received[msgnum]["done"].wait(timeout=self.timeout):
                 return self.received[msgnum]["message"]
+            elif self.received[msgnum]["done"].wait(timeout=self.timeout):
+                logger.warning(
+                        f"Worker {self.name} did not return message within {self.timeout} seconds."
+                    )
+                return self.received[msgnum]["message"]
             else:
-                logger.error(
-                    f"Worker {self.name} did not return message within {self.timeout} seconds."
-                )
-                return False
+                raise TimeoutError(f"Worker {self.name} did not return message within {self.timeout} seconds.")
 
-        def register_callable(self, newcallable: SavedCallable = None):
+        def register_callable(self, newcallable: SavedCallable):
             """Used to register a callable with the worker process,
             which can then be used by later calls for processing this specific callable.
             """
@@ -347,7 +349,7 @@ class _WorkerManager:
             else:
                 self.registered_callables[newcallable.id] = newcallable
 
-        def start(self) -> None:
+        def start(self) -> bool:
             """Initialisation of the worker instance in another process and creating a thread
             for monitoring communications.
             """
@@ -389,7 +391,7 @@ class _WorkerManager:
                         time.sleep(self.sleeptime)
             self.running = False
 
-    def get_instructions(self) -> Mapping[str, Callable[[Any], None]]:
+    def get_instructions(self) -> dict[Instruction, Callable]:
         """Returns a mapping of the instruction keywords to the function calls of this class,
         for ease of use when decoding messages.
         Using a MappingProxyType seemed interesting and potentially best fitting for this use.
@@ -495,7 +497,7 @@ class _WorkerManager:
             starttreads = []
             for workernum in range(self.worker_amount):
                 self.workers[workernum] = self._WorkerProxy(
-                    name=workernum,
+                    name=str(workernum),
                     workqueue=self.workqueue,
                     resultqueue=self.workreturnqueue,
                     sleeptime=self.sleeptime,
@@ -527,7 +529,7 @@ class _WorkerManager:
         t = threading.Thread(target=dostart, name="start workers")
         t.start()
 
-    def stop(self, message: Message = None):
+    def stop(self, message: Message | None = None):
         """will shut down the worker processes by spawning a thread for each worker
         that then tries to stop the workers in parallel. Returns when all worker processes are stopped.
         """
@@ -549,11 +551,11 @@ class _WorkerManager:
         stopthread.join()
         if message:
             returnmessage = Message(
-                Instruction.done, f"stoptask for workers", message.id
+                Instruction.done, message.id, f"stoptask for workers"
             )
             self.return_result(returnmessage)
 
-    def quit(self, message: Message = None):
+    def quit(self, message: Message | None = None):
         """Will shut down this workermanager thread and all it's subprocesses."""
         self.stop()
         if message:
@@ -588,10 +590,10 @@ class AsyncWorker:
 
     def __init__(
         self,
-        worker_amount: int = None,
+        worker_amount: int | None = None,
         timeout: float = 0.5,
         sleeptime: float = 0.01,
-        loop: asyncio.BaseEventLoop = None,
+        loop: asyncio.BaseEventLoop | None = None,
     ):
         if worker_amount:
             self.worker_amount = worker_amount
@@ -659,7 +661,7 @@ class AsyncWorker:
         else:
             return result.data
 
-    async def register_callable(self, newcallable: Callable) -> Coroutine:
+    async def register_callable(self, newcallable: Callable) -> Callable:
         """Coroutine for registering a callable method, returns an awaitable.
         This awaitable can be called together with the original callable arguments and will return the results when ready.
 
@@ -680,7 +682,7 @@ class AsyncWorker:
 
         # Helper function wrapping the coroutine to be returned as the given callable.
         @functools.wraps(newcallable)
-        async def get_callable(*args, **kwargs):
+        async def get_callable(*args, **kwargs) -> Coroutine:
             return await self._submit_callable_job(callable_id, args, kwargs)
 
         return get_callable

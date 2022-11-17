@@ -3,3 +3,4 @@ workertest.py
 *.ipynb
 *.lock
 .pytest_cache
+.vscode
