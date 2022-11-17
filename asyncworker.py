@@ -37,29 +37,6 @@ from typing import Any, Awaitable, Coroutine, Dict, Callable, Mapping, Union
 
 logger = logging.getLogger(__name__)
 
-# Instruction = frozenset(
-#     {
-#         "register_callable",
-#         "process",
-#         "process_registered",
-#         "start",
-#         "stop",
-#         "quit",
-#         "done",
-#         "exception",
-#     }
-# )
-
-
-# def Message(
-#     instruction: str, data: Any = None, m_id: int = None
-# ) -> Dict[str, Any]:
-#     # Basic information structure used to pass information around the different parts of this module
-#     if instruction not in Instruction:
-#         raise KeyError(f"{instruction} not a valid instruction")
-#     else:
-#         return {"instruction": instruction, "data": data, "id": m_id}
-
 
 class Instruction(Enum):
     register_callable = 1
@@ -631,7 +608,7 @@ class AsyncWorker:
         self._internal_results = {}
 
     async def __aenter__(self):
-        await self.run()
+        await self.init()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -712,7 +689,7 @@ class AsyncWorker:
         # Tells and waits for the workermanager to quit.
         await self._communicate(Instruction.quit)
 
-    async def run(self) -> None:
+    async def init(self) -> None:
         # Builds the workermanager thread and tells it to start managing the workerthreads
         self.workermanager = _WorkerManager(
             worker_amount=self.worker_amount,

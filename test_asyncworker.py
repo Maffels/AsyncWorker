@@ -50,7 +50,7 @@ answer = find_primes_workload(MAX_NUM)
 async def default_worker() -> asyncworker.AsyncWorker:
     for num_workers in HARDWARE_THREADS:
         worker = asyncworker.AsyncWorker(num_workers)
-        await worker.run()
+        await worker.init()
         yield worker
         await worker.quit()
 
