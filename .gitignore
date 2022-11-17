@@ -1,2 +1,5 @@
 __pycache__/
 workertest.py
+*.ipynb
+*.lock
+.pytest_cache
