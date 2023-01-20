@@ -254,7 +254,7 @@ class _WorkerManager:
 
         @staticmethod
         def _work(
-            workerobj: _WorkerProcess,
+            workerobj,
             receiveQueue: multiprocessing.Queue,
             sendQueue: multiprocessing.Queue,
             workQueue: multiprocessing.Queue,
@@ -282,7 +282,7 @@ class _WorkerManager:
             self.timeout = timeout
             self.sendQueue = multiprocessing.Queue()
             self.receiveQueue = multiprocessing.Queue()
-            self.workerprocess = None
+            self.workerprocess:multiprocessing.Process
             self.received = {}
             self.running = False
             self.registered_callables = {}
@@ -412,7 +412,7 @@ class _WorkerManager:
         loop: asyncio.AbstractEventLoop,
         sleeptime: float,
         timeout: float,
-        return_callable: Coroutine,
+        return_callable: Callable,
     ):
         self.worker_amount = worker_amount
         self.threads = []
@@ -599,7 +599,10 @@ class AsyncWorker:
             self.worker_amount = worker_amount
         else:
             cpus = os.cpu_count()
-            self.worker_amount = cpus - 1 if cpus > 2 else 1
+            if not cpus:
+                raise ValueError("could not get cpu_count from system")
+            else:
+                self.worker_amount = cpus - 1 if cpus > 2 else 1
 
         self.timeout = timeout
         self.sleeptime = sleeptime
