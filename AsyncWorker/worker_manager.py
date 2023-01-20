@@ -20,160 +20,165 @@ from .worker import _WorkerProcess
 logger = logging.getLogger(__name__)
 
 
+def init_worker_manager(
+    worker_amount: int,
+    hostqueue: queue.SimpleQueue,
+    loop: asyncio.BaseEventLoop,
+    sleeptime: float,
+    timeout: float,
+):
+    ...
+
+
+class _WorkerProxy:
+    """Class functioning as the proxy for a workerclass in another process,
+    handles direct communication through two queues and the thread
+    """
+
+    @staticmethod
+    def _work(
+        workerobj,
+        receiveQueue: multiprocessing.Queue,
+        sendQueue: multiprocessing.Queue,
+        workQueue: multiprocessing.Queue,
+        resultQueue: multiprocessing.Queue,
+        workername: str,
+    ):
+        # Helper function used to start the worker instance in a multiprocessing.Process
+        worker = workerobj(receiveQueue, sendQueue, workQueue, resultQueue, workername)
+        worker.run()
+
+    def __init__(
+        self,
+        name: str,
+        workqueue: multiprocessing.Queue,
+        resultqueue: multiprocessing.Queue,
+        sleeptime: int | float = 0.1,
+        timeout: int | float = 0.5,
+    ):
+        self.name = name
+        self.workqueue = workqueue
+        self.resultqueue = resultqueue
+        self.sleeptime = sleeptime
+        self.timeout = timeout
+        self.sendQueue = multiprocessing.Queue()
+        self.receiveQueue = multiprocessing.Queue()
+        self.workerprocess: multiprocessing.Process
+        self.received = {}
+        self.running = False
+        self.registered_callables = {}
+        self._msgnum = 0
+        self.listenprocess = None
+
+    def _listen_to_process(self):
+        """Used as the target for a thread used for handling return messages from the worker process
+        After receiving a message, look for the corresponding message id and set its event so the waiting thread
+        gets notified and can continue.
+        """
+        while self.running:
+            try:
+                returnmessage = self.receiveQueue.get(block=True, timeout=self.timeout)
+                if returnmessage.id in self.received.keys():
+                    self.received[returnmessage.id]["message"] = returnmessage
+                    self.received[returnmessage.id]["done"].set()
+                else:
+                    logger.error(
+                        f"Got unhandled message {returnmessage} from worker {self.name}."
+                    )
+            except queue.Empty:
+                pass
+
+    def _communicate(
+        self, instruction: Instruction, data: Any | None = None
+    ) -> Message:
+        """Used to abstract away the needs of communicating directlty with the worker process.
+
+        Constructs an awaitable dict entry by using the message id as the identifier and adding a settable Event object.
+        After putting a message in the communication queue to the worker of this workerproxy instance,
+        this message id can then be used by the listening thread to return received results
+        to the formerly built awaitable dict and then notify the thread waiting for it by setting the Event object.
+
+        """
+        self._msgnum += 1
+        msgnum = self._msgnum
+        message = Message(instruction, msgnum, data)
+        event = multiprocessing.Event()
+        self.received[msgnum] = {"done": event, "message": None}
+        self.sendQueue.put(message)
+        if self.received[msgnum]["done"].wait(timeout=self.timeout):
+            return self.received[msgnum]["message"]
+        elif self.received[msgnum]["done"].wait(timeout=self.timeout):
+            logger.warning(
+                f"Worker {self.name} did not return message within {self.timeout} seconds."
+            )
+            return self.received[msgnum]["message"]
+        else:
+            raise TimeoutError(
+                f"Worker {self.name} did not return message within {self.timeout} seconds."
+            )
+
+    def register_callable(self, newcallable: SavedCallable):
+        """Used to register a callable with the worker process,
+        which can then be used by later calls for processing this specific callable.
+        """
+        returnmessage = self._communicate(Instruction.register_callable, newcallable)
+        if returnmessage.instruction == Instruction.exception:
+            logger.error(
+                f"""Worker{self.name} during the registering of the callabe: {newcallable} 
+                    encountered error: {returnmessage.data} """
+            )
+        else:
+            self.registered_callables[newcallable.id] = newcallable
+
+    def start(self) -> bool:
+        """Initialisation of the worker instance in another process and creating a thread
+        for monitoring communications.
+        """
+        self.running = True
+        self.listenprocess = threading.Thread(
+            target=self._listen_to_process,
+            name=f"listen to workerprocess{self.name}",
+        )
+        self.listenprocess.start()
+
+        self.workerprocess = multiprocessing.Process(
+            target=self._work,
+            args=(
+                _WorkerProcess,
+                self.receiveQueue,
+                self.sendQueue,
+                self.workqueue,
+                self.resultqueue,
+                self.name,
+            ),
+        )
+        self.workerprocess.start()
+
+        while not self.workerprocess.is_alive():
+            time.sleep(self.sleeptime)
+        returnmessage = self._communicate(Instruction.start)
+        if returnmessage:
+            return True
+        else:
+            return False
+
+    def shutdown(self):
+        # Used to get the process to shut down.
+        if self.workerprocess.is_alive():
+            returnmessage = self._communicate(Instruction.quit)
+            if returnmessage:
+                while self.workerprocess.is_alive():
+                    # Wait until the process and its instance is shut down.
+                    time.sleep(self.sleeptime)
+        self.running = False
+
+
 class _WorkerManager:
     """Class used by AsyncWorker to do work outside of the event loop, but within the same namespace.
     Used with the goal of letting the event loop be stalled for the least amount of time possible
     when interacting with the objects needed for multiprocessing.
 
     """
-
-    class _WorkerProxy:
-        """Class functioning as the proxy for a workerclass in another process,
-        handles direct communication through two queues and the thread
-        """
-
-        @staticmethod
-        def _work(
-            workerobj,
-            receiveQueue: multiprocessing.Queue,
-            sendQueue: multiprocessing.Queue,
-            workQueue: multiprocessing.Queue,
-            resultQueue: multiprocessing.Queue,
-            workername: str,
-        ):
-            # Helper function used to start the worker instance in a multiprocessing.Process
-            worker = workerobj(
-                receiveQueue, sendQueue, workQueue, resultQueue, workername
-            )
-            worker.run()
-
-        def __init__(
-            self,
-            name: str,
-            workqueue: multiprocessing.Queue,
-            resultqueue: multiprocessing.Queue,
-            sleeptime: int | float = 0.1,
-            timeout: int | float = 0.5,
-        ):
-            self.name = name
-            self.workqueue = workqueue
-            self.resultqueue = resultqueue
-            self.sleeptime = sleeptime
-            self.timeout = timeout
-            self.sendQueue = multiprocessing.Queue()
-            self.receiveQueue = multiprocessing.Queue()
-            self.workerprocess: multiprocessing.Process
-            self.received = {}
-            self.running = False
-            self.registered_callables = {}
-            self._msgnum = 0
-            self.listenprocess = None
-
-        def _listen_to_process(self):
-            """Used as the target for a thread used for handling return messages from the worker process
-            After receiving a message, look for the corresponding message id and set its event so the waiting thread
-            gets notified and can continue.
-            """
-            while self.running:
-                try:
-                    returnmessage = self.receiveQueue.get(
-                        block=True, timeout=self.timeout
-                    )
-                    if returnmessage.id in self.received.keys():
-                        self.received[returnmessage.id]["message"] = returnmessage
-                        self.received[returnmessage.id]["done"].set()
-                    else:
-                        logger.error(
-                            f"Got unhandled message {returnmessage} from worker {self.name}."
-                        )
-                except queue.Empty:
-                    pass
-
-        def _communicate(
-            self, instruction: Instruction, data: Any | None = None
-        ) -> Message:
-            """Used to abstract away the needs of communicating directlty with the worker process.
-
-            Constructs an awaitable dict entry by using the message id as the identifier and adding a settable Event object.
-            After putting a message in the communication queue to the worker of this workerproxy instance,
-            this message id can then be used by the listening thread to return received results
-            to the formerly built awaitable dict and then notify the thread waiting for it by setting the Event object.
-
-            """
-            self._msgnum += 1
-            msgnum = self._msgnum
-            message = Message(instruction, msgnum, data)
-            event = multiprocessing.Event()
-            self.received[msgnum] = {"done": event, "message": None}
-            self.sendQueue.put(message)
-            if self.received[msgnum]["done"].wait(timeout=self.timeout):
-                return self.received[msgnum]["message"]
-            elif self.received[msgnum]["done"].wait(timeout=self.timeout):
-                logger.warning(
-                    f"Worker {self.name} did not return message within {self.timeout} seconds."
-                )
-                return self.received[msgnum]["message"]
-            else:
-                raise TimeoutError(
-                    f"Worker {self.name} did not return message within {self.timeout} seconds."
-                )
-
-        def register_callable(self, newcallable: SavedCallable):
-            """Used to register a callable with the worker process,
-            which can then be used by later calls for processing this specific callable.
-            """
-            returnmessage = self._communicate(
-                Instruction.register_callable, newcallable
-            )
-            if returnmessage.instruction == Instruction.exception:
-                logger.error(
-                    f"""Worker{self.name} during the registering of the callabe: {newcallable} 
-                    encountered error: {returnmessage.data} """
-                )
-            else:
-                self.registered_callables[newcallable.id] = newcallable
-
-        def start(self) -> bool:
-            """Initialisation of the worker instance in another process and creating a thread
-            for monitoring communications.
-            """
-            self.running = True
-            self.listenprocess = threading.Thread(
-                target=self._listen_to_process,
-                name=f"listen to workerprocess{self.name}",
-            )
-            self.listenprocess.start()
-
-            self.workerprocess = multiprocessing.Process(
-                target=self._work,
-                args=(
-                    _WorkerProcess,
-                    self.receiveQueue,
-                    self.sendQueue,
-                    self.workqueue,
-                    self.resultqueue,
-                    self.name,
-                ),
-            )
-            self.workerprocess.start()
-
-            while not self.workerprocess.is_alive():
-                time.sleep(self.sleeptime)
-            returnmessage = self._communicate(Instruction.start)
-            if returnmessage:
-                return True
-            else:
-                return False
-
-        def shutdown(self):
-            # Used to get the process to shut down.
-            if self.workerprocess.is_alive():
-                returnmessage = self._communicate(Instruction.quit)
-                if returnmessage:
-                    while self.workerprocess.is_alive():
-                        # Wait until the process and its instance is shut down.
-                        time.sleep(self.sleeptime)
-            self.running = False
 
     def get_instructions(self) -> dict[Instruction, Callable]:
         """Returns a mapping of the instruction keywords to the function calls of this class,
@@ -280,7 +285,7 @@ class _WorkerManager:
             # print('in dostart')
             starttreads = []
             for workernum in range(self.worker_amount):
-                self.workers[workernum] = self._WorkerProxy(
+                self.workers[workernum] = _WorkerProxy(
                     name=str(workernum),
                     workqueue=self.workqueue,
                     resultqueue=self.workreturnqueue,
