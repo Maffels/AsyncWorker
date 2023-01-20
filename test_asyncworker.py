@@ -3,7 +3,7 @@ import asyncio
 import math
 from typing import AsyncIterable
 
-import asyncworker
+import AsyncWorker.asyncworker as asyncworker
 
 # All test coroutines will be treated as marked.
 pytestmark = pytest.mark.asyncio
