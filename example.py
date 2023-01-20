@@ -3,7 +3,7 @@ import math
 import time
 import os
 
-from asyncworker import AsyncWorker
+from AsyncWorker.asyncworker import AsyncWorker
 
 """ Example which uses find_primes as a CPU-bound task scheduled from inside an event loop.
 
