@@ -1,6 +1,7 @@
 import multiprocessing
 import queue
 import threading
+import time
 
 from typing import Any, Callable
 
@@ -86,6 +87,7 @@ class _WorkerProcess:
         args = message.data.args
         kwargs = message.data.kwargs
         function = message.data.function
+        # print(f'worker{self.name} is processing {message}')
         try:
             result = function(*args, **kwargs)
             returnmessage = Message(Instruction.done, message.id, result)
@@ -103,15 +105,16 @@ class _WorkerProcess:
         # Used as target for the workerthread, pulls work from the workqueue and hands it over for processing.
         while self.do_work:
             try:
-                work = self.workQueue.get(block=True, timeout=self.sleeptime)
+                work = self.workQueue.get_nowait()
                 self.handle_message(work)
                 # return True
             except queue.Empty:
-                pass
+                time.sleep(self.sleeptime)
 
     def start(self, message: Message):
         # Will start a workerprocess that'll handle the work put in the workqueue
         self.do_work = True
+        # print(f'starting worker{self.name}')
         self.workthread = threading.Thread(
             target=self.work, name=f"workerprocess {self.name} workthread"
         )
@@ -149,9 +152,11 @@ class _WorkerProcess:
     def run(self):
         # Main work loop checking for messages from the workermanager thread.
         self.running = True
+        # print(f"{self.receiveQueue.empty()}")
         while self.running:
             try:
-                message = self.receiveQueue.get(block=True, timeout=self.sleeptime)
+                message = self.receiveQueue.get_nowait()
+                # print(f'got message in worker {self.name}: {message}')
                 self.handle_message(message)
             except queue.Empty:
-                pass
+                time.sleep(self.sleeptime)

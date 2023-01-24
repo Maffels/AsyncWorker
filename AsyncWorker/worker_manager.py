@@ -20,14 +20,30 @@ from .worker import _WorkerProcess
 logger = logging.getLogger(__name__)
 
 
-def init_worker_manager(
+def inititialize_worker_manager(
     worker_amount: int,
-    hostqueue: queue.SimpleQueue,
-    loop: asyncio.BaseEventLoop,
+    hostqueue: multiprocessing.Queue,
+    loop: asyncio.AbstractEventLoop,
     sleeptime: float,
     timeout: float,
+    return_queue: multiprocessing.Queue
 ):
-    ...
+    # print('in the worker_manager process')
+    # print(worker_amount,hostqueue,loop,sleeptime,timeout,return_queue)
+    workermanager = _WorkerManager(
+            worker_amount=worker_amount,
+            hostqueue=hostqueue,
+            loop=loop,
+            sleeptime=sleeptime,
+            timeout=timeout,
+            return_queue=return_queue,
+        )
+
+    workermanagerthread = threading.Thread(
+            target=workermanager.run, name="AsyncWorker Worker Manager"
+        )
+    workermanagerthread.start()
+    
 
 
 class _WorkerProxy:
@@ -104,9 +120,12 @@ class _WorkerProxy:
         message = Message(instruction, msgnum, data)
         event = multiprocessing.Event()
         self.received[msgnum] = {"done": event, "message": None}
+        # print(f'worker{self.name} put message:{message} in the queue')
         self.sendQueue.put(message)
         if self.received[msgnum]["done"].wait(timeout=self.timeout):
+            # print(f'worker{self.name} got message:{message} from the queue')
             return self.received[msgnum]["message"]
+        
         elif self.received[msgnum]["done"].wait(timeout=self.timeout):
             logger.warning(
                 f"Worker {self.name} did not return message within {self.timeout} seconds."
@@ -151,6 +170,7 @@ class _WorkerProxy:
                 self.resultqueue,
                 self.name,
             ),
+            name=f'workerprocess{self.name}'
         )
         self.workerprocess.start()
 
@@ -197,11 +217,11 @@ class _WorkerManager:
     def __init__(
         self,
         worker_amount: int,
-        hostqueue: queue.SimpleQueue,
+        hostqueue: multiprocessing.Queue,
         loop: asyncio.AbstractEventLoop,
         sleeptime: float,
         timeout: float,
-        return_callable: Callable,
+        return_queue: multiprocessing.Queue,
     ):
         self.worker_amount = worker_amount
         self.threads = []
@@ -209,7 +229,7 @@ class _WorkerManager:
         self.loop = loop
         self.sleeptime = sleeptime
         self.timeout = timeout
-        self.return_callable = return_callable
+        self.return_queue = return_queue
         self.instructions = self.get_instructions()
         self.workqueue = multiprocessing.Queue()
         self.workreturnqueue = multiprocessing.Queue()
@@ -222,15 +242,15 @@ class _WorkerManager:
         """
         while self.running:
             try:
-                message = self.workreturnqueue.get(block=True, timeout=self.sleeptime)
+                message = self.workreturnqueue.get_nowait()
                 self.return_result(message)
             except queue.Empty:
-                pass
+                time.sleep(self.sleeptime)
 
     def return_result(self, message: Message):
         # Used to reinsert responses back into the event loop.
         # print(f"got returnmessage: {message}")
-        asyncio.run_coroutine_threadsafe(self.return_callable(message), self.loop)
+        self.return_queue.put(message)
 
     def register_callable(self, message: Message):
         """Used to register callables with all the worker processes.
@@ -266,12 +286,14 @@ class _WorkerManager:
         """Simple passthrough method that puts work in the workqueue
         The return of the work is handled by _handle_returnqueue in its own thread.
         """
+        # print(f'workermanager putting work in the workqueue:{message}')
         self.workqueue.put(message)
 
     def process_registered(self, message: Message):
         """Simple passthrough method that puts work for an already registered callable in the workqueue
         The return of the work is handled by _handle_returnqueue in its own thread.
         """
+        # print(f'workermanager putting work in the workqueue:{message}')
         self.workqueue.put(message)
 
     def start(self, message: Message):
@@ -290,6 +312,7 @@ class _WorkerManager:
                     workqueue=self.workqueue,
                     resultqueue=self.workreturnqueue,
                     sleeptime=self.sleeptime,
+                    timeout=self.timeout
                 )
                 starttreads.append(
                     threading.Thread(
@@ -305,6 +328,7 @@ class _WorkerManager:
             returnmessage = Message(
                 Instruction.done, id=message.id, data=f"start for workers"
             )
+            
             self.return_result(returnmessage)
 
         # Building a thread to handle the work return queue.
@@ -313,7 +337,6 @@ class _WorkerManager:
         )
         returnthread.start()
         self.threads.append(returnthread)
-
         # Building a thread that starts the worker processes.
         t = threading.Thread(target=dostart, name="start workers")
         t.start()
@@ -357,13 +380,14 @@ class _WorkerManager:
         starts listening and handling further instructions from the event loop via the given queue.
         """
         self.running = True
-        # print('here goes')
+        # print(f'{self.hostqueue} empty? {self.hostqueue.empty()}')
         while self.running:
             try:
-                message = self.hostqueue.get(block=True, timeout=self.sleeptime)
+                message = self.hostqueue.get_nowait()
+                # print(f"manager_thread got message: {message}")
                 self.instructions[message.instruction](message)
             except queue.Empty:
-                pass
+                time.sleep(self.sleeptime)
 
 
 class ManagerProcess:

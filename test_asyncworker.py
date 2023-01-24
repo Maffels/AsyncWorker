@@ -41,7 +41,7 @@ def find_primes_workload(max_num):
 
 # Exception raising workload
 def excepting_workload():
-    raise TypeError("test typeerror")
+    raise TypeError("test TypeError")
 
 
 answer = find_primes_workload(MAX_NUM)

@@ -41,7 +41,7 @@ from .data_classes import (
     Registered_Job,
 )
 
-from .worker_manager import _WorkerManager
+from .worker_manager import _WorkerManager, inititialize_worker_manager
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class AsyncWorker:
     def __init__(
         self,
         worker_amount: int | None = None,
-        timeout: float = 0.5,
+        timeout: float = 1.5,
         sleeptime: float = 0.01,
         loop: asyncio.BaseEventLoop | None = None,
     ):
@@ -75,9 +75,10 @@ class AsyncWorker:
 
         self.timeout = timeout
         self.sleeptime = sleeptime
-        self._worknum = 0
+        self._id_num = 0
         self.saved_callables = {}
-        self._workqueue = queue.SimpleQueue()
+        self._workqueue = multiprocessing.Queue()
+        self.return_queue = multiprocessing.Queue() 
         self.loop = loop if loop else asyncio.get_event_loop()
         self._internal_results = {}
 
@@ -89,28 +90,30 @@ class AsyncWorker:
         await self.quit()
 
     async def _update_resultdict(self, message):
-        """Used by the external workermanager thread to reinsert results into the loop
+        """Used by the external worker_manager thread to reinsert results into the loop
         Uses the message id to find the relevant dict entry and sets its results to the return value.
         """
+        # print('in _update_result')
         try:
             self._internal_results[message.id].set_result(message)
         except KeyError:
             logger.error(f"got unregistered returnmessage: {message}.")
 
     async def _communicate(self, instruction: Instruction, data: Any = None) -> Message:
-        """Abstracts away the communication to and from the workermanager thread.
+        """Abstracts away the communication to and from the worker_manager thread.
         Builds an awaitable asyncio.Future object which will be set by the
-        workermanager thread when the result is available,
+        worker_manager thread when the result is available,
         which in turn will be used to return the result to the calling coroutine
         """
-        self._worknum += 1
-        worknum = self._worknum
+        self._id_num += 1
+        worknum = self._id_num
         self._internal_results[worknum] = self.loop.create_future()
         message = Message(instruction, worknum, data)
         self._workqueue.put(message)
-
+        # print(f"put message: {message} in the queue")
         returnmessage = await self._internal_results[worknum]
         self._internal_results.pop(worknum)
+        # print(f"got returnmessage: {returnmessage}")
         return returnmessage
 
     async def _submit_callable_job(self, callable_id: int, args, kwargs):
@@ -142,7 +145,7 @@ class AsyncWorker:
         """
 
         # Build and store a new saved_callable instance,
-        # and tell the workermanager to register it with all processing threads
+        # and tell the worker_manager to register it with all processing threads
         callable_id = len(self.saved_callables)
         savedcallable = SavedCallable(id=callable_id, callable=newcallable)
         self.saved_callables[savedcallable.id] = savedcallable
@@ -160,24 +163,57 @@ class AsyncWorker:
         return get_callable
 
     async def quit(self) -> None:
-        # Tells and waits for the workermanager to quit.
+        # Tells and waits for the worker_manager to quit.
         await self._communicate(Instruction.quit)
+        self.running = False
+        await self.return_queue_watch_task
 
     async def init(self) -> None:
-        # Builds the workermanager thread and tells it to start managing the workerthreads
-        self.workermanager = _WorkerManager(
-            worker_amount=self.worker_amount,
-            hostqueue=self._workqueue,
-            loop=self.loop,
-            sleeptime=self.sleeptime,
-            timeout=self.timeout,
-            return_callable=self._update_resultdict,
-        )
+        # Builds the worker_manager thread and tells it to start managing the workerthreads
+        # self.worker_manager = _WorkerManager(
+        #     worker_amount=self.worker_amount,
+        #     hostqueue=self._workqueue,
+        #     loop=self.loop,
+        #     sleeptime=self.sleeptime,
+        #     timeout=self.timeout,
+        #     return_callable=self._update_resultdict,
+        # )
 
-        self.workermanagerthread = threading.Thread(
-            target=self.workermanager.run, name="AsyncWorker WorkerManager"
-        )
-        self.workermanagerthread.start()
+        # self.worker_managerthread = threading.Thread(
+        #     target=self.worker_manager.run, name="AsyncWorker WorkerManager"
+        # )
+        # self.worker_managerthread.start()
 
-        # Tells and waits for the workermanager to start.
+        # self.worker_manager
+        self.running = True
+        self.return_queue_watch_task = asyncio.create_task(self.watch_return_queue())
+        # print('starting worker_manager process')
+        self.worker_manager = multiprocessing.Process(
+            target=inititialize_worker_manager,
+            kwargs={
+                "worker_amount": self.worker_amount,
+                "hostqueue": self._workqueue,
+                "loop": self.loop,
+                "sleeptime": self.sleeptime,
+                "timeout": self.timeout,
+                "return_queue": self.return_queue,
+            },
+            name="worker_manager_process"
+        )
+        self.worker_manager.start()
+
+        # Tells and waits for the worker_manager to start.
         await self._communicate(Instruction.start)
+        
+    async def watch_return_queue(self):
+        while self.running:
+            try:
+                message = self.return_queue.get_nowait()
+                try:
+                    self._internal_results[message.id].set_result(message)
+                except KeyError:
+                    logger.error(f"got unregistered returnmessage: {message}.")
+                    # print(message)
+            except queue.Empty:
+                #await asyncio.sleep(self.sleeptime)
+                await asyncio.sleep(0)
