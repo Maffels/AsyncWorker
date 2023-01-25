@@ -41,7 +41,7 @@ from .data_classes import (
     Registered_Job,
 )
 
-from .worker_manager import _WorkerManager, inititialize_worker_manager
+from .worker_manager import _WorkerManager, initialize_worker_manager
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class AsyncWorker:
         self.sleeptime = sleeptime
         self._id_num = 0
         self.saved_callables = {}
-        self._workqueue = multiprocessing.Queue()
+        self.command_queue = multiprocessing.Queue()
         self.return_queue = multiprocessing.Queue() 
         self.loop = loop if loop else asyncio.get_event_loop()
         self._internal_results = {}
@@ -93,7 +93,6 @@ class AsyncWorker:
         """Used by the external worker_manager thread to reinsert results into the loop
         Uses the message id to find the relevant dict entry and sets its results to the return value.
         """
-        # print('in _update_result')
         try:
             self._internal_results[message.id].set_result(message)
         except KeyError:
@@ -109,11 +108,9 @@ class AsyncWorker:
         worknum = self._id_num
         self._internal_results[worknum] = self.loop.create_future()
         message = Message(instruction, worknum, data)
-        self._workqueue.put(message)
-        # print(f"put message: {message} in the queue")
+        self.command_queue.put(message)
         returnmessage = await self._internal_results[worknum]
         self._internal_results.pop(worknum)
-        # print(f"got returnmessage: {returnmessage}")
         return returnmessage
 
     async def _submit_callable_job(self, callable_id: int, args, kwargs):
@@ -172,7 +169,7 @@ class AsyncWorker:
         # Builds the worker_manager thread and tells it to start managing the workerthreads
         # self.worker_manager = _WorkerManager(
         #     worker_amount=self.worker_amount,
-        #     hostqueue=self._workqueue,
+        #     host_command_queue=self.command_queue,
         #     loop=self.loop,
         #     sleeptime=self.sleeptime,
         #     timeout=self.timeout,
@@ -189,14 +186,14 @@ class AsyncWorker:
         self.return_queue_watch_task = asyncio.create_task(self.watch_return_queue())
         # print('starting worker_manager process')
         self.worker_manager = multiprocessing.Process(
-            target=inititialize_worker_manager,
+            target=initialize_worker_manager,
             kwargs={
                 "worker_amount": self.worker_amount,
-                "hostqueue": self._workqueue,
+                "host_command_queue": self.command_queue,
                 "loop": self.loop,
                 "sleeptime": self.sleeptime,
                 "timeout": self.timeout,
-                "return_queue": self.return_queue,
+                "host_return_queue": self.return_queue,
             },
             name="worker_manager_process"
         )
@@ -213,7 +210,5 @@ class AsyncWorker:
                     self._internal_results[message.id].set_result(message)
                 except KeyError:
                     logger.error(f"got unregistered returnmessage: {message}.")
-                    # print(message)
             except queue.Empty:
-                #await asyncio.sleep(self.sleeptime)
                 await asyncio.sleep(0)

@@ -16,7 +16,7 @@ from .data_classes import (
 
 class _WorkerProcess:
     """Class describing the worker that will run inside of its own multiprocessing.Process instance.
-    Will check its hostconnection for instructions, and its workqueue for work when enabled.
+    Will check its hostconnection for instructions, and its work_queue for work when enabled.
     """
 
     def get_instructions(self) -> dict[Instruction, Callable]:
@@ -35,17 +35,17 @@ class _WorkerProcess:
 
     def __init__(
         self,
-        sendQueue: multiprocessing.Queue,
-        receiveQueue: multiprocessing.Queue,
-        workQueue: multiprocessing.Queue,
-        resultQueue: multiprocessing.Queue,
+        command_send_queue: multiprocessing.Queue,
+        command_return_queue: multiprocessing.Queue,
+        work_queue: multiprocessing.Queue,
+        result_queue: multiprocessing.Queue,
         workername: str,
         sleeptime: float = 0.1,
     ):
-        self.sendQueue: multiprocessing.Queue = sendQueue
-        self.receiveQueue: multiprocessing.Queue = receiveQueue
-        self.resultqueue: multiprocessing.Queue = resultQueue
-        self.workQueue: multiprocessing.Queue = workQueue
+        self.command_send_queue = command_send_queue
+        self.command_return_queue = command_return_queue
+        self.result_queue= result_queue
+        self.work_queue = work_queue
         self.name = workername
         self.sleeptime = sleeptime
         self.instructions = self.get_instructions()
@@ -59,11 +59,11 @@ class _WorkerProcess:
             callable_id = message.data.id
             new_callable = message.data.callable
             self.registered_callables[callable_id] = new_callable
-            self.sendQueue.put(
+            self.command_return_queue.put(
                 Message(Instruction.done, message.id, message.instruction)
             )
         except Exception as e:
-            self.sendQueue.put(Message(Instruction.exception, message.id, e))
+            self.command_return_queue.put(Message(Instruction.exception, message.id, e))
 
     def process_registered(self, message: Message):
         # Will call the specified callable with the given parameters and send back the results.
@@ -80,21 +80,20 @@ class _WorkerProcess:
             result = e
             returnmessage = Message(Instruction.exception, message.id, result)
 
-        self.resultqueue.put(returnmessage)
+        self.result_queue.put(returnmessage)
 
     def process(self, message: Message):
         # Will process the given callable with the given parameters and send back the results.
         args = message.data.args
         kwargs = message.data.kwargs
         function = message.data.function
-        # print(f'worker{self.name} is processing {message}')
         try:
             result = function(*args, **kwargs)
             returnmessage = Message(Instruction.done, message.id, result)
         except Exception as e:
             result = e
             returnmessage = Message(Instruction.exception, message.id, result)
-        self.resultqueue.put(returnmessage)
+        self.result_queue.put(returnmessage)
 
     def handle_message(self, message: Message):
         # Uses the included instruction to call the correct function for the enclosed data
@@ -102,34 +101,33 @@ class _WorkerProcess:
         self.instructions[message.instruction](message)
 
     def work(self):
-        # Used as target for the workerthread, pulls work from the workqueue and hands it over for processing.
+        # Used as target for the workerthread, pulls work from the work_queue and hands it over for processing.
         while self.do_work:
             try:
-                work = self.workQueue.get_nowait()
+                work = self.work_queue.get_nowait()
                 self.handle_message(work)
                 # return True
             except queue.Empty:
                 time.sleep(self.sleeptime)
 
     def start(self, message: Message):
-        # Will start a workerprocess that'll handle the work put in the workqueue
+        # Will start a workerprocess that'll handle the work put in the work_queue
         self.do_work = True
-        # print(f'starting worker{self.name}')
         self.workthread = threading.Thread(
             target=self.work, name=f"workerprocess {self.name} workthread"
         )
         self.workthread.start()
-        self.sendQueue.put(
+        self.command_return_queue.put(
             Message(Instruction.done, id=message.id, data=f"started worker {self.name}")
         )
         # self.run()
 
     def stop(self, message: Message | None = None):
-        # For telling this instance to stop checking the shared workqueue for work, but not quit.
+        # For telling this instance to stop checking the shared work_queue for work, but not quit.
         self.do_work = False
         self.workthread.join()
         if message:
-            self.sendQueue.put(
+            self.command_return_queue.put(
                 Message(
                     Instruction.done, id=message.id, data=f"stopped worker {self.name}"
                 )
@@ -137,30 +135,27 @@ class _WorkerProcess:
 
     def quit(self, message: Message | None = None):
         # Will shut down this worker process.
-        print(f'worker{self.name} in quit')
         self.stop()
-        print(f'worker{self.name} stop complete')
         self.running = False
+        print(f'worker{self.name} quitting with message:{message}')
         if message:
             try:
-                print(f'sending quit from worker{self.name}')
-                self.sendQueue.put(
+                self.command_return_queue.put(
                     Message(
                         Instruction.done, id=message.id, data=f"quit worker {self.name}"
                     )
                 )
+                print(f'worker{self.name} sent quit confirmation')
+                print(f'queue empty for worker? {self.command_return_queue.empty()}')
             except BrokenPipeError as e:
-                pass
-        print(f'worker{self.name} quit done sent')
+                print(e)
 
     def run(self):
         # Main work loop checking for messages from the workermanager thread.
         self.running = True
-        # print(f"{self.receiveQueue.empty()}")
         while self.running:
             try:
-                message = self.receiveQueue.get_nowait()
-                # print(f'got message in worker {self.name}: {message}')
+                message = self.command_send_queue.get_nowait()
                 self.handle_message(message)
             except queue.Empty:
                 time.sleep(self.sleeptime)

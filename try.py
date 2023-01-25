@@ -11,5 +11,10 @@ async def dostuff():
         res = await worker.process(f)
         print(res)
         
+async def register_stuff():
+    async with AsyncWorker(worker_amount=1) as worker:
+        reg = await worker.register_callable(f)
+        await reg()
+        
 if __name__ == "__main__":
-    asyncio.run(dostuff())
+    asyncio.run(register_stuff())
