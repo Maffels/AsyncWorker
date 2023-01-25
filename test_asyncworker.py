@@ -3,7 +3,7 @@ import asyncio
 import math
 from typing import AsyncIterable
 
-import AsyncWorker.asyncworker as asyncworker
+from AsyncWorker.asyncworker import AsyncWorker
 
 # All test coroutines will be treated as marked.
 pytestmark = pytest.mark.asyncio
@@ -48,23 +48,23 @@ answer = find_primes_workload(MAX_NUM)
 
 
 @pytest.fixture
-async def default_worker() -> AsyncIterable[asyncworker.AsyncWorker]:
+async def default_worker() -> AsyncIterable[AsyncWorker]:
     for num_workers in HARDWARE_THREADS:
-        worker = asyncworker.AsyncWorker(num_workers)
+        worker = AsyncWorker(num_workers)
         await worker.init()
         yield worker
         await worker.quit()
 
 
 @pytest.fixture
-async def context_worker() -> AsyncIterable[asyncworker.AsyncWorker]:
+async def context_worker() -> AsyncIterable[AsyncWorker]:
     for num_workers in HARDWARE_THREADS:
-        async with asyncworker.AsyncWorker(num_workers) as worker:
+        async with AsyncWorker(num_workers) as worker:
             yield worker
 
 
 @pytest.fixture
-async def worker_types(default_worker, context_worker) -> AsyncIterable[asyncworker.AsyncWorker]:
+async def worker_types(default_worker, context_worker) -> AsyncIterable[AsyncWorker]:
     async for worker in default_worker:
         yield worker
     async for worker in context_worker:
@@ -77,7 +77,7 @@ async def test_test():
 
 
 
-async def test_process_default(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
+async def test_process_default(worker_types: AsyncIterable[AsyncWorker]):
     async for worker in worker_types:
         jobs = [
             asyncio.create_task(worker.process(find_primes_workload, MAX_NUM))
@@ -87,7 +87,7 @@ async def test_process_default(worker_types: AsyncIterable[asyncworker.AsyncWork
             assert await completed == answer
 
 
-async def test_registered_function(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
+async def test_registered_function(worker_types: AsyncIterable[AsyncWorker]):
     async for worker in worker_types:
         async_work = await worker.register_callable(find_primes_workload)
         jobs = [asyncio.create_task(async_work(MAX_NUM)) for _ in range(NUM_JOBS)]
@@ -95,14 +95,14 @@ async def test_registered_function(worker_types: AsyncIterable[asyncworker.Async
             assert await completed == answer
 
 
-async def test_process_exception(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
+async def test_process_exception(worker_types: AsyncIterable[AsyncWorker]):
     async for worker in worker_types:
         with pytest.raises(TypeError) as e:
             job = asyncio.create_task(worker.process(excepting_workload))
             await job
 
 
-async def test_registered_exception(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
+async def test_registered_exception(worker_types: AsyncIterable[AsyncWorker]):
     async for worker in worker_types:
         async_work = await worker.register_callable(find_primes_workload)
         with pytest.raises(TypeError) as e:

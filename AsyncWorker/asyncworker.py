@@ -60,7 +60,7 @@ class AsyncWorker:
     def __init__(
         self,
         worker_amount: int | None = None,
-        timeout: float = 1.5,
+        timeout: float = 0.5,
         sleeptime: float = 0.01,
         loop: asyncio.BaseEventLoop | None = None,
     ):

@@ -93,7 +93,8 @@ class _WorkerProxy:
         """
         while self.running:
             try:
-                returnmessage = self.receiveQueue.get(block=True, timeout=self.timeout)
+                returnmessage = self.receiveQueue.get_nowait()
+                #print(f'workerproxy{self.name} got returnmessage: {returnmessage}')
                 if returnmessage.id in self.received.keys():
                     self.received[returnmessage.id]["message"] = returnmessage
                     self.received[returnmessage.id]["done"].set()
@@ -102,7 +103,7 @@ class _WorkerProxy:
                         f"Got unhandled message {returnmessage} from worker {self.name}."
                     )
             except queue.Empty:
-                pass
+                time.sleep(self.sleeptime)
 
     def _communicate(
         self, instruction: Instruction, data: Any | None = None
@@ -126,12 +127,14 @@ class _WorkerProxy:
             # print(f'worker{self.name} got message:{message} from the queue')
             return self.received[msgnum]["message"]
         
-        elif self.received[msgnum]["done"].wait(timeout=self.timeout):
-            logger.warning(
-                f"Worker {self.name} did not return message within {self.timeout} seconds."
-            )
-            return self.received[msgnum]["message"]
+        # elif self.received[msgnum]["done"].wait(timeout=self.timeout):
+        #     logger.warning(
+        #         f"Worker {self.name} did not return message within {self.timeout} seconds."
+        #     )
+            
+        #     return self.received[msgnum]["message"]
         else:
+            print(f'listenprocess running? {self.listenprocess.is_alive()}')
             raise TimeoutError(
                 f"Worker {self.name} did not return message within {self.timeout} seconds."
             )

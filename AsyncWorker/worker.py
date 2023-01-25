@@ -137,10 +137,13 @@ class _WorkerProcess:
 
     def quit(self, message: Message | None = None):
         # Will shut down this worker process.
+        print(f'worker{self.name} in quit')
         self.stop()
+        print(f'worker{self.name} stop complete')
         self.running = False
         if message:
             try:
+                print(f'sending quit from worker{self.name}')
                 self.sendQueue.put(
                     Message(
                         Instruction.done, id=message.id, data=f"quit worker {self.name}"
@@ -148,6 +151,7 @@ class _WorkerProcess:
                 )
             except BrokenPipeError as e:
                 pass
+        print(f'worker{self.name} quit done sent')
 
     def run(self):
         # Main work loop checking for messages from the workermanager thread.
