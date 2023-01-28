@@ -8,6 +8,7 @@ from typing import Any, Callable
 from .data_classes import (
     Instruction,
     Message,
+    Worker_Message,
     SavedCallable,
     Process_Job,
     Registered_Job,
@@ -39,12 +40,12 @@ class _WorkerProcess:
         command_return_queue: multiprocessing.Queue,
         work_queue: multiprocessing.Queue,
         result_queue: multiprocessing.Queue,
-        workername: str,
+        workername: int,
         sleeptime: float = 0.1,
     ):
         self.command_send_queue = command_send_queue
         self.command_return_queue = command_return_queue
-        self.result_queue= result_queue
+        self.result_queue = result_queue
         self.work_queue = work_queue
         self.name = workername
         self.sleeptime = sleeptime
@@ -55,15 +56,25 @@ class _WorkerProcess:
 
     def register_callable(self, message: Message):
         # Used to register the given callable with this instance.
+        print(f"workerprocess{self.name} registering callable: {message}")
         try:
             callable_id = message.data.id
             new_callable = message.data.callable
             self.registered_callables[callable_id] = new_callable
             self.command_return_queue.put(
-                Message(Instruction.done, message.id, message.instruction)
+                Worker_Message(
+                    Instruction.done,
+                    id=message.id,
+                    data=message.instruction,
+                    worker=self.name,
+                )
             )
+            print(f"workerprocess returned message with id:{message.id}")
         except Exception as e:
-            self.command_return_queue.put(Message(Instruction.exception, message.id, e))
+            print(f"worker{self.name} encountered: {e}")
+            self.command_return_queue.put(
+                Worker_Message(Instruction.exception, message.id, e, self.name)
+            )
 
     def process_registered(self, message: Message):
         # Will call the specified callable with the given parameters and send back the results.
@@ -75,10 +86,14 @@ class _WorkerProcess:
         kwargs = message.data.kwargs
         try:
             result = saved_callable(*args, **kwargs)
-            returnmessage = Message(Instruction.done, message.id, result)
+            returnmessage = Worker_Message(
+                Instruction.done, message.id, result, self.name
+            )
         except Exception as e:
             result = e
-            returnmessage = Message(Instruction.exception, message.id, result)
+            returnmessage = Worker_Message(
+                Instruction.exception, message.id, result, self.name
+            )
 
         self.result_queue.put(returnmessage)
 
@@ -89,10 +104,14 @@ class _WorkerProcess:
         function = message.data.function
         try:
             result = function(*args, **kwargs)
-            returnmessage = Message(Instruction.done, message.id, result)
+            returnmessage = Worker_Message(
+                Instruction.done, message.id, result, self.name
+            )
         except Exception as e:
             result = e
-            returnmessage = Message(Instruction.exception, message.id, result)
+            returnmessage = Worker_Message(
+                Instruction.exception, message.id, result, self.name
+            )
         self.result_queue.put(returnmessage)
 
     def handle_message(self, message: Message):
@@ -117,8 +136,13 @@ class _WorkerProcess:
             target=self.work, name=f"workerprocess {self.name} workthread"
         )
         self.workthread.start()
-        self.command_return_queue.put(
-            Message(Instruction.done, id=message.id, data=f"started worker {self.name}")
+        self.command_return_queue.put_nowait(
+            Worker_Message(
+                Instruction.done,
+                id=message.id,
+                data=Instruction.start,
+                worker=self.name,
+            )
         )
         # self.run()
 
@@ -127,28 +151,37 @@ class _WorkerProcess:
         self.do_work = False
         self.workthread.join()
         if message:
-            self.command_return_queue.put(
-                Message(
-                    Instruction.done, id=message.id, data=f"stopped worker {self.name}"
+            self.command_return_queue.put_nowait(
+                Worker_Message(
+                    Instruction.done,
+                    id=message.id,
+                    data=Instruction.stop,
+                    worker=self.name,
                 )
             )
 
     def quit(self, message: Message | None = None):
         # Will shut down this worker process.
+        print(f"workerprocess{self.name} got {message}")
         self.stop()
+        print(f"workerprocess{self.name} stopped")
         self.running = False
-        print(f'worker{self.name} quitting with message:{message}')
+
         if message:
+            return_message = Worker_Message(
+                Instruction.done,
+                id=message.id,
+                data=f"quit worker {self.name},",
+                worker=self.name,
+            )
             try:
-                self.command_return_queue.put(
-                    Message(
-                        Instruction.done, id=message.id, data=f"quit worker {self.name}"
-                    )
+
+                self.command_return_queue.put_nowait(return_message)
+                print(
+                    f"workerprocess{self.name} put {return_message} in command_return_queue"
                 )
-                print(f'worker{self.name} sent quit confirmation')
-                print(f'queue empty for worker? {self.command_return_queue.empty()}')
             except BrokenPipeError as e:
-                print(e)
+                pass
 
     def run(self):
         # Main work loop checking for messages from the workermanager thread.

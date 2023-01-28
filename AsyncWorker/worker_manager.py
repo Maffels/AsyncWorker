@@ -4,13 +4,17 @@ import time
 import asyncio
 import threading
 import queue
+import concurrent.futures
 
 from typing import Any, Callable
 
 from .data_classes import (
     Instruction,
     Message,
+    Worker_Message,
     SavedCallable,
+    Worker_Futures,
+    Worker_Future,
     Process_Job,
     Registered_Job,
 )
@@ -26,22 +30,21 @@ def initialize_worker_manager(
     loop: asyncio.AbstractEventLoop,
     sleeptime: float,
     timeout: float,
-    host_return_queue: multiprocessing.Queue
+    host_return_queue: multiprocessing.Queue,
 ):
     workermanager = _WorkerManager(
-            worker_amount=worker_amount,
-            host_command_queue=host_command_queue,
-            loop=loop,
-            sleeptime=sleeptime,
-            timeout=timeout,
-            host_return_queue=host_return_queue,
-        )
+        worker_amount=worker_amount,
+        host_command_queue=host_command_queue,
+        loop=loop,
+        sleeptime=sleeptime,
+        timeout=timeout,
+        host_return_queue=host_return_queue,
+    )
 
     workermanagerthread = threading.Thread(
-            target=workermanager.run, name="AsyncWorker Worker Manager"
-        )
+        target=workermanager.run, name="AsyncWorker Worker Manager"
+    )
     workermanagerthread.start()
-    
 
 
 class _WorkerProxy:
@@ -59,16 +62,17 @@ class _WorkerProxy:
         name: str,
     ):
         # Helper function used to start the worker instance in a multiprocessing.Process
-        worker = workerobj(command_send_queue, command_return_queue, work_queue, result_queue, name)
+        worker = workerobj(
+            command_send_queue, command_return_queue, work_queue, result_queue, name
+        )
         worker.run()
 
     def __init__(
         self,
-        name: str,
+        name: int,
         work_queue: multiprocessing.Queue,
         result_queue: multiprocessing.Queue,
         command_return_queue: multiprocessing.Queue,
-        workers_futures: dict,
         sleeptime: int | float = 0.1,
         timeout: int | float = 0.5,
     ):
@@ -80,28 +84,9 @@ class _WorkerProxy:
         self.command_send_queue = multiprocessing.Queue()
         self.command_return_queue = command_return_queue
         self.workerprocess: multiprocessing.Process
-        self.workers_futures = workers_futures
+        self.futures = Worker_Futures(self.name)
         self.running = False
         self.registered_callables = {}
-        self._msgnum = 0
-
-    # def _listen_to_process(self):
-    #     """Used as the target for a thread used for handling return messages from the worker process
-    #     After receiving a message, look for the corresponding message id and set its event so the waiting thread
-    #     gets notified and can continue.
-    #     """
-    #     while self.running:
-    #         try:
-    #             returnmessage = self.command_return_queue.get_nowait()
-    #             if returnmessage.id in self.workers_futures.keys():
-    #                 self.workers_futures[returnmessage.id]["message"] = returnmessage
-    #                 self.workers_futures[returnmessage.id]["done"].set()
-    #             else:
-    #                 logger.error(
-    #                     f"Got unhandled message {returnmessage} from worker {self.name}."
-    #                 )
-    #         except queue.Empty:
-    #             time.sleep(self.sleeptime)
 
     def _communicate(
         self, instruction: Instruction, data: Any | None = None
@@ -114,28 +99,20 @@ class _WorkerProxy:
         to the formerly built awaitable dict and then notify the thread waiting for it by setting the Event object.
 
         """
-        self._msgnum += 1
-        msgnum = self._msgnum
-        message = Message(instruction, msgnum, data)
-        event = multiprocessing.Event()
-        self.workers_futures[msgnum] = {"done": event, "message": None}
-        print(f'worker{self.name} sending: {message}')
+        msgnum = self.futures.get_msgnum()
+        message = Worker_Message(
+            instruction=instruction, id=msgnum, data=data, worker=self.name
+        )
+        self.futures.put(message.id)
+        print(f"workerproxy{self.name} sending: {message}")
         self.command_send_queue.put(message)
-        if self.workers_futures[msgnum]["done"].wait(timeout=self.timeout):
-            return self.workers_futures[msgnum]["message"]
-        
-        elif self.workers_futures[msgnum]["done"].wait(timeout=self.timeout):
-            logger.warning(
-                f"Worker {self.name} did not return message within {self.timeout} seconds."
-            )
-            
-            return self.workers_futures[msgnum]["message"]
-        else:
-            print(f'event status: {self.workers_futures[msgnum]["done"].is_set()}')
-            print(f'is the queue really empty? {self.command_return_queue.empty()}')
-            raise TimeoutError(
-                f"Worker {self.name} did not return message within {self.timeout * 2} seconds."
-            )
+        try:
+            returnmessage = self.futures.wait(id=message.id, timeout=self.timeout)
+            print(f"_communicate got returnmessage:{returnmessage}")
+            return returnmessage
+        except TimeoutError as e:
+            # logger.error(e)
+            raise TimeoutError(e)
 
     def register_callable(self, newcallable: SavedCallable):
         """Used to register a callable with the worker process,
@@ -149,6 +126,7 @@ class _WorkerProxy:
             )
         else:
             self.registered_callables[newcallable.id] = newcallable
+            return True
 
     def start(self) -> bool:
         """Initialisation of the worker instance in another process and creating a thread
@@ -162,9 +140,9 @@ class _WorkerProxy:
                 "command_return_queue": self.command_return_queue,
                 "work_queue": self.work_queue,
                 "result_queue": self.result_queue,
-                "name":self.name
+                "name": self.name,
             },
-            name=f'workerprocess{self.name}'
+            name=f"workerprocess{self.name}",
         )
         self.workerprocess.start()
 
@@ -176,7 +154,7 @@ class _WorkerProxy:
         else:
             return False
 
-    def shutdown(self):
+    def quit(self):
         # Used to get the process to shut down.
         if self.workerprocess.is_alive():
             returnmessage = self._communicate(Instruction.quit)
@@ -185,6 +163,7 @@ class _WorkerProxy:
                     # Wait until the process and its instance is shut down.
                     time.sleep(self.sleeptime)
         self.running = False
+        self.workerprocess.join()
 
 
 class _WorkerManager:
@@ -218,7 +197,6 @@ class _WorkerManager:
         host_return_queue: multiprocessing.Queue,
     ):
         self.worker_amount = worker_amount
-        self.threads = []
         self.host_command_queue = host_command_queue
         self.loop = loop
         self.sleeptime = sleeptime
@@ -228,11 +206,10 @@ class _WorkerManager:
         self.work_queue = multiprocessing.Queue()
         self.result_queue = multiprocessing.Queue()
         self.command_return_queue = multiprocessing.Queue()
-        self.workers_futures = {}
-        self.workers = {}
+        self.workers: dict[int, _WorkerProxy] = {}
         self.running = False
 
-    def _handle_returnqueue(self):
+    def _handle_result_queue(self):
         """Used as the target of a dedicated thread that handles the work returnqueue
         which will then send it back to the caller event loop.
         """
@@ -240,26 +217,23 @@ class _WorkerManager:
         After receiving a message, look for the corresponding message id and set its event so the waiting thread
         gets notified and can continue.
         """
-        print('started listenprocess')
+        print("started listenprocess")
         while self.running:
-            try:
-                returnmessage = self.command_return_queue.get_nowait()
-                print(f'got returnmessage: {returnmessage}')
-                if returnmessage.id in self.workers_futures.keys():
-                    self.workers_futures[returnmessage.id]["message"] = returnmessage
-                    self.workers_futures[returnmessage.id]["done"].set()
-                else:
-                    logger.error(
-                        f"Got unhandled message {returnmessage} from worker {self.name}."
-                    )
-            except queue.Empty:
-                pass
             try:
                 message = self.result_queue.get_nowait()
                 self.return_result(message)
             except queue.Empty:
                 time.sleep(self.sleeptime)
                 
+    def _handle_command_return_queue(self):
+        while self.running:
+            try:
+                returnmessage: Worker_Message = self.command_return_queue.get_nowait()
+                print(f"command listen thread got returnmessage: {returnmessage}")
+                self.workers[returnmessage.worker].futures.set(returnmessage)
+            except queue.Empty:
+                time.sleep(self.sleeptime)
+        
 
     def return_result(self, message: Message):
         # Used to reinsert responses back into the event loop.
@@ -293,6 +267,7 @@ class _WorkerManager:
 
         t = threading.Thread(target=registertask, name="registerTask")
         t.start()
+        t.join()
 
     def process(self, message: Message):
         """Simple passthrough method that puts work in the work_queue
@@ -312,22 +287,56 @@ class _WorkerManager:
         returns when all workers report they're ready for work.
         Also starts the thread that will be handling the work returnqueue.
         """
-        returnthread = threading.Thread(
-        target=self._handle_returnqueue, name="handle work return thread"
+        self._handle_result_queue_thread = threading.Thread(
+            target=self._handle_result_queue, name="handle return queue"
         )
-        returnthread.start()
-        self.threads.append(returnthread)
+        self._handle_result_queue_thread.start()
+        
+        self._handle_return_command_queue_thread = threading.Thread(
+            target=self._handle_command_return_queue, name="handle return queue"
+        )
+        self._handle_return_command_queue_thread.start()
+
+        # def start_worker(worker_id: int) -> _WorkerProxy:
+        #     proxy = _WorkerProxy(
+        #         name=worker_id,
+        #         work_queue=self.work_queue,
+        #         result_queue=self.result_queue,
+        #         command_return_queue=self.command_return_queue,
+        #         sleeptime=self.sleeptime,
+        #         timeout=self.timeout,
+        #     )
+        #     print(f'built proxy {worker_id}')
+        #     proxy.start()
+        #     return proxy
+        # print('before threadpoolexecutor')
+        # with concurrent.futures.ThreadPoolExecutor(
+        #     max_workers=self.worker_amount,
+        #     thread_name_prefix="start worker"
+        # ) as executor:
+        #     print('in executor')
+        #     start_threads = {
+        #         executor.submit(start_worker, worker_id): worker_id
+        #         for worker_id in range(self.worker_amount)
+        #     }
+        #     print('submitted threads')
+        #     for completed in concurrent.futures.as_completed(start_threads):
+        #         worker_id = start_threads[completed]
+        #         try:
+        #             self.workers[worker_id] = completed.result()
+        #         except Exception as e:
+        #             print(e)
+
         def dostart():
             starttreads = []
             for workernum in range(self.worker_amount):
                 self.workers[workernum] = _WorkerProxy(
-                    name=str(workernum),
+                    name=workernum,
                     work_queue=self.work_queue,
                     result_queue=self.result_queue,
                     command_return_queue=self.command_return_queue,
-                    workers_futures=self.workers_futures,
                     sleeptime=self.sleeptime,
-                    timeout=self.timeout
+                    timeout=self.timeout,
                 )
                 starttreads.append(
                     threading.Thread(
@@ -341,9 +350,9 @@ class _WorkerManager:
             for thread in starttreads:
                 thread.join()
             returnmessage = Message(
-                Instruction.done, id=message.id, data=f"start for workers"
+                Instruction.done, id=message.id, data=Instruction.start
             )
-            
+
             self.return_result(returnmessage)
 
         # Building a thread to handle the work return queue.
@@ -351,40 +360,61 @@ class _WorkerManager:
         # Building a thread that starts the worker processes.
         t = threading.Thread(target=dostart, name="start workers")
         t.start()
+        t.join()
+        print("done starting")
 
     def stop(self, message: Message | None = None):
         """will shut down the worker processes by spawning a thread for each worker
         that then tries to stop the workers in parallel. Returns when all worker processes are stopped.
         """
 
-        def stoptask():
-            stoptasks = [
-                threading.Thread(
-                    target=worker.shutdown, name=f"Worker{worker.name} shutdown"
-                )
-                for worker in self.workers.values()
-            ]
-            for task in stoptasks:
-                task.start()
-            for task in stoptasks:
-                task.join()
+        # def stoptask():
+        #     stoptasks = [
+        #         threading.Thread(
+        #             target=worker.quit, name=f"Workerproxy{worker.name} quit"
+        #         )
+        #         for worker in self.workers.values()
+        #     ]
+        #     for task in stoptasks:
+        #         task.start()
+        #         time.sleep(0.5)
+        #     for task in stoptasks:
+        #         task.join()
+        
+        def stop_task():
+            for worker in self.workers.values():
+                print(f'worker{worker.name} quitting')
+                worker.quit()
+                
+        
 
-        stopthread = threading.Thread(target=stoptask, name="worker shutdown thread")
+        stopthread = threading.Thread(target=stop_task, name="worker shutdown thread")
         stopthread.start()
+        print("stopthread started")
+        # time.sleep(0.5)
+        # self.command_return_queue.put_nowait('JeMeODeRRR')
         stopthread.join()
-        if message:
-            returnmessage = Message(
-                Instruction.done, message.id, f"stoptask for workers"
-            )
-            self.return_result(returnmessage)
+        print("stopthread joined")
+        # if message:
+        #     returnmessage = Message(
+        #         Instruction.done, message.id, f"stoptask for workers"
+        #     )
+        #     self.return_result(returnmessage)
 
     def quit(self, message: Message | None = None):
         """Will shut down this workermanager thread and all it's subprocesses."""
         self.stop()
+
+        self.running = False
+        
+        self._handle_result_queue_thread.join()
+        self._handle_return_command_queue_thread.join()
+        
         if message:
             returnmessage = Message(Instruction.done, message.id, message.instruction)
             self.return_result(returnmessage)
-        self.running = False
+        
+        
 
     def run(self):
         """Functions as the target of the newly built workermanagerthread,
@@ -397,8 +427,3 @@ class _WorkerManager:
                 self.instructions[message.instruction](message)
             except queue.Empty:
                 time.sleep(self.sleeptime)
-
-
-class ManagerProcess:
-    def __init__(self):
-        ...

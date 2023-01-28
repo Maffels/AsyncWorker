@@ -7,12 +7,12 @@ def f():
 
 
 async def dostuff():
-    async with AsyncWorker(worker_amount=1) as worker:
+    async with AsyncWorker(worker_amount=2) as worker:
         res = await worker.process(f)
         print(res)
         
 async def register_stuff():
-    async with AsyncWorker(worker_amount=1) as worker:
+    async with AsyncWorker(worker_amount=2) as worker:
         reg = await worker.register_callable(f)
         await reg()
         
