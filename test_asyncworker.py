@@ -3,7 +3,7 @@ import asyncio
 import math
 from typing import AsyncIterable
 
-import asyncworker
+import asyncworker.asyncworker as asyncworker
 
 # All test coroutines will be treated as marked.
 pytestmark = pytest.mark.asyncio
@@ -51,7 +51,7 @@ answer = find_primes_workload(MAX_NUM)
 async def default_worker() -> AsyncIterable[asyncworker.AsyncWorker]:
     for num_workers in HARDWARE_THREADS:
         worker = asyncworker.AsyncWorker(num_workers)
-        await worker.init()
+        await worker.initialize()
         yield worker
         await worker.quit()
 

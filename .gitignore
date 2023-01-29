@@ -4,3 +4,4 @@ workertest.py
 *.lock
 .pytest_cache
 .vscode
+try.py
