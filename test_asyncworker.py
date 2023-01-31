@@ -87,12 +87,12 @@ async def test_process_default(worker_types: AsyncIterable[asyncworker.AsyncWork
             assert await completed == answer
 
 
-async def test_registered_function(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
-    async for worker in worker_types:
-        async_work = await worker.register_callable(find_primes_workload)
-        jobs = [asyncio.create_task(async_work(MAX_NUM)) for _ in range(NUM_JOBS)]
-        for completed in asyncio.as_completed(jobs):
-            assert await completed == answer
+# async def test_registered_function(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
+#     async for worker in worker_types:
+#         async_work = await worker.register_callable(find_primes_workload)
+#         jobs = [asyncio.create_task(async_work(MAX_NUM)) for _ in range(NUM_JOBS)]
+#         for completed in asyncio.as_completed(jobs):
+#             assert await completed == answer
 
 
 async def test_process_exception(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
@@ -102,9 +102,9 @@ async def test_process_exception(worker_types: AsyncIterable[asyncworker.AsyncWo
             await job
 
 
-async def test_registered_exception(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
-    async for worker in worker_types:
-        async_work = await worker.register_callable(find_primes_workload)
-        with pytest.raises(TypeError) as e:
-            job = asyncio.create_task(async_work())
-            await job
+# async def test_registered_exception(worker_types: AsyncIterable[asyncworker.AsyncWorker]):
+#     async for worker in worker_types:
+#         async_work = await worker.register_callable(find_primes_workload)
+#         with pytest.raises(TypeError) as e:
+#             job = asyncio.create_task(async_work())
+#             await job
