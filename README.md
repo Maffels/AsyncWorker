@@ -1,31 +1,26 @@
 # AsyncWorker
 
-Asyncio multithreading bridge module for Python
+Asyncio multithreading bridge module for Python.
 
-Module for handling threaded CPU-bound work asynchronously within the asyncio framework. 
-It is aimed to function as an easy to use bridge between I/O-bound and CPU-bound code.
+A module for handling threaded CPU-bound work asynchronously within the asyncio framework, 
+aimed at functioning as an easy-to-use bridge between I/O-bound and CPU-bound code.
 
-Can be used in an async context manager or by constructing an instance and calling .run() on it.
-When not using it in a context manager, needs a call to .run() to start, and .quit() to stop.
-    
+Can also be used in an async context manager.   
 
-Callables can currently be processed in two ways:
+CPU-bound callables can be processed by calling *initialized instance*.process(callable, args, kwargs), which returns an awaitable coroutine that will return when another process has calculated the result.
 
-    - Callables can be processed directly by calling .process(Callable, *args, **kwargs), 
-      which is an awaitable that returns as soon as the callable with its args has been processed
+example:
       
       async with AsyncWorker() as asyncworker:
         result = await asyncworker.process(CPU_bound_function, *args, **kwargs)
 
-      
-<!--     - Callables can be registered with the class by calling .register(Callable). 
-      This will return a coroutine that functions as an awaitable substitute for the original callable,
-      which can be called with the same arguments and returns as soon as the result is ready.
-      
+Another way of using Asyncworker is by registring a cpu-bound callable beforehand, receiving the awaitable version in return for later use.      
+
+an example for this:
+
       async with AsyncWorker() as asyncworker:
         CPU_bound_coroutine = await asyncworker.register_callable(CPU_bound_function)
-        result = await CPU_bound_coroutine(*args, **kwargs) -->
-
+        result = await CPU_bound_coroutine(*args, **kwargs)
 
 Will use total-1 system processing threads by default, but can this be specified by including worker_amount=n.
     
