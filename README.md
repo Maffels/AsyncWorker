@@ -1,5 +1,4 @@
 # AsyncWorker
-Written with Python 3.8
 
 Asyncio multithreading bridge module for Python
 
@@ -19,16 +18,15 @@ Callables can currently be processed in two ways:
         result = await asyncworker.process(CPU_bound_function, *args, **kwargs)
 
       
-    - Callables can be registered with the class by calling .register(Callable). 
+<!--     - Callables can be registered with the class by calling .register(Callable). 
       This will return a coroutine that functions as an awaitable substitute for the original callable,
       which can be called with the same arguments and returns as soon as the result is ready.
       
       async with AsyncWorker() as asyncworker:
         CPU_bound_coroutine = await asyncworker.register_callable(CPU_bound_function)
-        result = await CPU_bound_coroutine(*args, **kwargs)
+        result = await CPU_bound_coroutine(*args, **kwargs) -->
 
 
 Will use total-1 system processing threads by default, but can this be specified by including worker_amount=n.
     
-Looks like its somewhat quicker than using a ProcessPoolExecutor with the standard executor.submit method, 
-but way slower than executor.map. 
+
